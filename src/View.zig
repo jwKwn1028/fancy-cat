@@ -1,7 +1,4 @@
-//! The page view, like zathura's continuous mode: units (pages, or spreads in
-//! two-page mode) stacked top to bottom and scrolled by the pixel. Each unit
-//! is rendered once into strips that stay in the terminal, so scrolling only
-//! moves their placements and renders nothing.
+//! Continuous view: each unit renders once into strips that scrolling only moves.
 const Self = @This();
 const std = @import("std");
 const RenderWorker = @import("RenderWorker.zig");
@@ -16,14 +13,13 @@ const c = PdfHandler.c;
 
 const Writer = std.Io.Writer;
 
-/// Strip height in pixels: small enough that scrolling into a new page
-/// renders a little at a time.
+/// Pixels; small, so a new page renders a little at a time.
 const strip_height: i32 = 256;
-/// Strips wider than this split into columns half as wide; Ghostty takes
-/// images up to 10000 pixels a side.
+/// Taller under tmux, where each strip boundary rewrites its placeholder rows.
+const tmux_strip_height: i32 = 4 * strip_height;
+/// Wider strips split in columns; Ghostty takes images up to 10000 pixels a side.
 const max_strip_width: i32 = 4096;
-/// Kitty and Ghostty draw images with a z-index below this under cells that
-/// have a background color, so bars and link labels show over the page.
+/// Below this z-index, Kitty and Ghostty draw images under colored cells.
 const below_backgrounds: i32 = -1_073_741_825;
 const selection_width = 256;
 const selection_height = 64;
@@ -46,7 +42,6 @@ pub const max_visible = 64;
 pub const Visible = struct {
     unit: u16,
     layout: PdfHandler.Layout,
-    /// Position and size, in pixels from the view's top-left corner.
     left: i32,
     top: i32,
     width: i32,
@@ -96,23 +91,18 @@ allocator: std.mem.Allocator,
 config: *Config,
 transport: Transport = .direct,
 pdf: *PdfHandler = undefined,
-// The view's size and the cell size, in pixels; zero until the terminal
-// reports them.
 width: i32 = 0,
 height: i32 = 0,
 cell_w: i32 = 0,
 cell_h: i32 = 0,
 // Pixels per point; zero until the first fit.
 zoom: f32 = 0,
-// Whether the zoom follows the window, fitting the width or the whole page.
 fitted: bool = true,
 width_mode: bool = true,
 // The unit at the top of the view, and how many of its pixels are above it.
 unit: u16 = 0,
 y: f32 = 0,
-// How far units wider than the view are panned, in pixels.
 x: f32 = 0,
-// Pixels down to center a document shorter than the view.
 center: f32 = 0,
 layouts: std.AutoHashMap(u16, PdfHandler.Layout),
 tiles: std.AutoHashMap(TileKey, Tile),
@@ -126,7 +116,6 @@ previous_frame: ?Frame = null,
 previous_highlights: ?Highlights = null,
 forward: bool = true,
 next_id: u32 = 1,
-// Images placed in the last frame; images to delete in the next.
 placed: std.AutoHashMap(u32, Placement),
 placed_cell_size: [2]i32 = .{ 0, 0 },
 shown: std.AutoHashMap(u32, Placement),
@@ -145,7 +134,6 @@ unit_marks: std.ArrayList(RenderWorker.Mark) = .{},
 tile_marks: std.ArrayList(RenderWorker.Mark) = .{},
 overlay_images: [3]?u32 = @splat(null),
 overlay_placed: [3]bool = @splat(false),
-// Places to return to with Ctrl+o and Ctrl+i, and the session's marks.
 jumps: std.ArrayList(Position) = .{},
 jump_at: usize = 0,
 marks: [52]?Position = [_]?Position{null} ** 52,
@@ -170,7 +158,6 @@ pub fn attach(self: *Self, pdf: *PdfHandler) void {
     self.unit = pdf.unitOf(@min(self.unit, pdf.total_pages - 1));
 }
 
-/// Deletes the strips from the terminal.
 pub fn deinit(self: *Self, w: *Writer) void {
     var it = self.tiles.valueIterator();
     while (it.next()) |tile| self.disposeImage(w, tile.id) catch {};
@@ -200,7 +187,6 @@ fn ready(self: *Self) bool {
     return self.width > 0 and self.height > 0 and self.cell_w > 0 and self.cell_h > 0;
 }
 
-/// Sizes the view to the terminal, less `reserved_rows` at the bottom.
 pub fn setGeometry(self: *Self, cols: u16, rows: u16, width_pix: u16, height_pix: u16, reserved_rows: u16) void {
     if (cols == 0 or rows == 0 or width_pix < cols or height_pix < rows) {
         self.width = 0;
@@ -222,8 +208,6 @@ pub fn setGeometry(self: *Self, cols: u16, rows: u16, width_pix: u16, height_pix
     self.normalize();
 }
 
-// --- zoom ---------------------------------------------------------------
-
 fn limit(self: *Self, zoom: f32) f32 {
     return std.math.clamp(zoom, self.config.general.zoom_min, max_zoom);
 }
@@ -237,7 +221,6 @@ fn fitZoom(self: *Self) f32 {
     return self.limit(zoom * self.config.general.size);
 }
 
-// Changes the zoom, keeping the view's center (or top) on the same spot.
 fn rescale(self: *Self, zoom: f32, keep_center: bool) void {
     const old = self.zoom;
     if (old == zoom) return;
@@ -251,7 +234,6 @@ fn rescale(self: *Self, zoom: f32, keep_center: bool) void {
     self.x = (self.x + half_w) * f - half_w;
 }
 
-/// Multiplies the zoom by `factor`, as + and - do.
 pub fn zoomBy(self: *Self, factor: f32) void {
     if (!self.ready()) return;
     self.normalize();
@@ -260,7 +242,6 @@ pub fn zoomBy(self: *Self, factor: f32) void {
     self.normalize();
 }
 
-/// Sets the zoom as a percentage of the page's printed size, as :100% does.
 pub fn setZoomPercent(self: *Self, percent: f32) void {
     if (!self.ready()) return;
     self.normalize();
@@ -271,13 +252,11 @@ pub fn setZoomPercent(self: *Self, percent: f32) void {
     self.normalize();
 }
 
-/// Fits the width (s) or the whole page (a).
 pub fn fit(self: *Self, width: bool) void {
     self.width_mode = width;
     self.refit();
 }
 
-/// Fits the zoom to the window again, showing the current unit from its top.
 pub fn refit(self: *Self) void {
     self.fitted = true;
     if (!self.ready()) return;
@@ -287,8 +266,6 @@ pub fn refit(self: *Self) void {
     self.rescale(self.fitZoom(), false);
     self.normalize();
 }
-
-// --- layouts and drawing state -----------------------------------------
 
 fn layoutOf(self: *Self, unit: u16) PdfHandler.Layout {
     if (self.layouts.get(unit)) |layout| return layout;
@@ -321,7 +298,6 @@ fn gap(self: *Self) f32 {
     return @floatFromInt(self.snap(@max(0, self.config.general.page_gap), self.cell_h));
 }
 
-/// The page layout changed: keep the page in view and discard old strips.
 pub fn layoutChanged(self: *Self, page: u16) void {
     self.layouts.clearRetainingCapacity();
     self.clearTiles();
@@ -332,7 +308,6 @@ pub fn layoutChanged(self: *Self, page: u16) void {
     self.normalize();
 }
 
-/// The document was reloaded: keeps the place and draws everything again.
 pub fn reloaded(self: *Self) void {
     self.document +%= 1;
     self.holding_viewport = self.placed.count() != 0;
@@ -342,12 +317,10 @@ pub fn reloaded(self: *Self) void {
     self.normalize();
 }
 
-/// Colors changed: draws the pages again.
 pub fn redraw(self: *Self) void {
     self.clearTiles();
 }
 
-/// A returning pane or newly attached client can need the cached files again.
 pub fn refreshTmuxImages(self: *Self) void {
     var it = self.files.valueIterator();
     while (it.next()) |file| file.refresh = true;
@@ -365,10 +338,6 @@ fn clearTiles(self: *Self) void {
     self.tile_bytes = 0;
 }
 
-// --- position -----------------------------------------------------------
-
-// Moves the position into the unit at the top of the view, and keeps the
-// view within the document: no space above the first unit or below the last.
 fn normalize(self: *Self) void {
     if (!self.ready()) return;
     if (self.zoom <= 0) self.zoom = self.fitZoom();
@@ -382,7 +351,6 @@ fn normalize(self: *Self) void {
         self.unit = next;
     }
 
-    // Content from the view's top down; at the end, pull the view back up.
     var below = self.unitHeight(self.unit) - self.y;
     var unit = self.unit;
     while (below < view_h) {
@@ -393,15 +361,12 @@ fn normalize(self: *Self) void {
     self.center = 0;
     if (below < view_h) {
         self.y -= view_h - below;
-        // Past the start, the whole document is shorter than the view.
         if (self.walkUp()) |short_by| self.center = @round(short_by / 2);
     }
     self.y = @round(self.y);
     self.clampX();
 }
 
-// Moves up while the view starts above its unit. Returns how far the view
-// starts above the first unit, if it does.
 fn walkUp(self: *Self) ?f32 {
     while (self.y < 0) {
         const prev = self.pdf.prevUnit(self.unit) orelse {
@@ -435,7 +400,6 @@ fn box(self: *Self, unit: u16, top: i32) Visible {
     return .{ .unit = unit, .layout = layout, .left = left, .top = top, .width = w, .height = h };
 }
 
-/// The units in view, top to bottom.
 pub fn visible(self: *Self, out: []Visible) []Visible {
     if (!self.ready() or self.zoom <= 0) return out[0..0];
     const gap_px: i32 = @intFromFloat(self.gap());
@@ -451,7 +415,6 @@ pub fn visible(self: *Self, out: []Visible) []Visible {
     return out[0..n];
 }
 
-/// Converts terminal mouse coordinates to the pixel grid used for painting.
 pub fn mousePoint(self: *Self, col: u16, row: u16, dx: u16, dy: u16) c.fz_point {
     return .{
         .x = @floatFromInt(@as(i32, col) * self.cell_w + dx),
@@ -459,7 +422,6 @@ pub fn mousePoint(self: *Self, col: u16, row: u16, dx: u16, dy: u16) c.fz_point 
     };
 }
 
-/// The page and page-local point under a position in the viewport.
 pub fn pageAt(self: *Self, point: c.fz_point) ?PagePoint {
     if (point.x < 0 or point.y < 0 or
         point.x >= @as(f32, @floatFromInt(self.width)) or point.y >= @as(f32, @floatFromInt(self.height))) return null;
@@ -479,7 +441,6 @@ pub fn pageAt(self: *Self, point: c.fz_point) ?PagePoint {
     return null;
 }
 
-/// Maps a drag endpoint to the page it began on, stopping at the page edge.
 pub fn pointOnPage(self: *Self, page: u16, point: c.fz_point) ?c.fz_point {
     var buf: [max_visible]Visible = undefined;
     for (self.visible(&buf)) |v| {
@@ -497,8 +458,7 @@ pub fn pointOnPage(self: *Self, page: u16, point: c.fz_point) ?c.fz_point {
     return null;
 }
 
-/// The unit being read: the one at the top, or the next when the top one
-/// fills less than a third of the view.
+/// The top unit, or the next when the top one fills less than a third of the view.
 pub fn currentUnit(self: *Self) u16 {
     if (!self.ready() or self.zoom <= 0) return self.unit;
     const shown_px = self.unitHeight(self.unit) - self.y;
@@ -508,24 +468,19 @@ pub fn currentUnit(self: *Self) u16 {
     return self.unit;
 }
 
-/// Shows the unit holding `page` (0-based) from its top.
 pub fn goToPage(self: *Self, page: u16) void {
     self.unit = self.pdf.unitOf(@min(page, self.pdf.total_pages - 1));
     self.y = 0;
     self.normalize();
 }
 
-/// Shows the end of the document.
 pub fn goToEnd(self: *Self) void {
     self.unit = self.pdf.lastUnit();
-    // The last unit's bottom at the view's top; normalize pulls the view
-    // back until that bottom meets the view's bottom. A huge offset would
-    // lose the unit's height to rounding.
+    // normalize pulls this back to the end; a huge offset would lose precision.
     self.y = if (self.zoom > 0) self.unitHeight(self.unit) else 0;
     self.normalize();
 }
 
-/// Moves `count` units forward or back, showing the new one from its top.
 pub fn turn(self: *Self, forward: bool, count: u32) void {
     const previous_unit = self.unit;
     const previous_top = self.snap(self.center - self.y, self.cell_h);
@@ -542,20 +497,17 @@ pub fn turn(self: *Self, forward: bool, count: u32) void {
     }
 }
 
-/// Scrolls down by `pixels`, or up when negative, across pages.
 pub fn scrollBy(self: *Self, pixels: f32) void {
     self.y += pixels;
     self.normalize();
 }
 
-/// Pans right by `pixels`, or left when negative.
 pub fn panBy(self: *Self, pixels: f32) void {
     self.x += pixels;
     self.clampX();
 }
 
-/// Puts the point at height y of `page`, in the page's own coordinates, at
-/// the top of the view; a NaN y shows the page from its top.
+/// y is in the page's own coordinates; NaN shows the page from its top.
 pub fn goToPoint(self: *Self, page: u16, y: f32) void {
     self.goToPage(page);
     if (std.math.isNan(y) or self.zoom <= 0) return;
@@ -564,7 +516,6 @@ pub fn goToPoint(self: *Self, page: u16, y: f32) void {
     self.normalize();
 }
 
-/// Centers a rectangle of the layout of the unit holding `page`.
 pub fn showRect(self: *Self, page: u16, rect: c.fz_rect) void {
     self.unit = self.pdf.unitOf(page);
     self.normalize();
@@ -574,14 +525,12 @@ pub fn showRect(self: *Self, page: u16, rect: c.fz_rect) void {
     self.normalize();
 }
 
-/// Shows the current unit from its top (H).
 pub fn pageTop(self: *Self) void {
     self.unit = self.currentUnit();
     self.y = 0;
     self.normalize();
 }
 
-/// Puts the current unit's bottom at the view's bottom (L).
 pub fn pageBottom(self: *Self) void {
     if (!self.ready()) return;
     self.unit = self.currentUnit();
@@ -589,16 +538,12 @@ pub fn pageBottom(self: *Self) void {
     self.normalize();
 }
 
-/// Shows the current unit from its top-left corner (P).
 pub fn snapToPage(self: *Self) void {
     self.x = 0;
     self.pageTop();
 }
 
-// --- jumps and marks ----------------------------------------------------
-
-/// A place that survives zoom changes: a unit's first page and how far the
-/// view's top is into it, in points.
+/// Survives zoom changes: y is in points into the unit.
 pub const Position = struct { page: u16, y: f32 };
 
 const max_jumps = 100;
@@ -614,7 +559,6 @@ pub fn restore(self: *Self, p: Position) void {
     self.normalize();
 }
 
-/// Remembers the place before a jump, for Ctrl+o.
 pub fn recordJump(self: *Self) void {
     self.jumps.shrinkRetainingCapacity(self.jump_at);
     self.pushJump(self.position());
@@ -628,10 +572,8 @@ fn pushJump(self: *Self, p: Position) void {
     if (self.jumps.items.len > max_jumps) _ = self.jumps.orderedRemove(0);
 }
 
-/// Ctrl+o: back to the place before the last jump.
 pub fn jumpBack(self: *Self) void {
     if (self.jump_at >= self.jumps.items.len) {
-        // Keep the place being left, so Ctrl+i returns to it.
         self.pushJump(self.position());
         if (self.jumps.items.len == 0) return;
         self.jump_at = self.jumps.items.len - 1;
@@ -641,7 +583,6 @@ pub fn jumpBack(self: *Self) void {
     self.restore(self.jumps.items[self.jump_at]);
 }
 
-/// Ctrl+i: forward again after Ctrl+o.
 pub fn jumpForward(self: *Self) void {
     if (self.jump_at + 1 >= self.jumps.items.len) return;
     self.jump_at += 1;
@@ -656,14 +597,12 @@ fn markSlot(letter: u21) ?usize {
     };
 }
 
-/// m{a-z}: remembers the place under a letter. False for other keys.
 pub fn setMark(self: *Self, letter: u21) bool {
     const slot = markSlot(letter) orelse return false;
     self.marks[slot] = self.position();
     return true;
 }
 
-/// '{a-z}: returns to a mark. False when none is set under the letter.
 pub fn goToMark(self: *Self, letter: u21) bool {
     const slot = markSlot(letter) orelse return false;
     const p = self.marks[slot] orelse return false;
@@ -672,8 +611,6 @@ pub fn goToMark(self: *Self, letter: u21) bool {
     return true;
 }
 
-// --- strips in the terminal ---------------------------------------------
-
 fn budget(self: *Self) usize {
     if (!self.config.cache.enabled) return 0;
     return @as(usize, self.config.cache.memory_mb) * 1024 * 1024;
@@ -681,7 +618,7 @@ fn budget(self: *Self) usize {
 
 fn stripHeight(self: *Self) i32 {
     if (self.transport == .direct) return strip_height;
-    return @max(self.cell_h, @divFloor(strip_height, self.cell_h) * self.cell_h);
+    return @max(self.cell_h, @divFloor(tmux_strip_height, self.cell_h) * self.cell_h);
 }
 
 fn tileWidth(self: *Self, width: i32) i32 {
@@ -704,8 +641,7 @@ fn nextImageId(self: *Self) u32 {
     return id;
 }
 
-// A placeholder cell carries one image. Blend highlights into affected
-// strips while retaining their unmarked counterparts in the cache.
+// A placeholder cell carries one image, so highlights blend into strip copies.
 fn collectMarks(self: *Self, visible_unit: Visible) !void {
     self.unit_marks.clearRetainingCapacity();
     if (self.transport != .tmux) return;
@@ -740,8 +676,6 @@ fn marksOnTile(self: *Self, area: c.fz_irect) !void {
     }
 }
 
-// Collect visible placements and build the visible-first render queue. The
-// first planned strip need not start at the top of a tall zoomed page.
 fn collect(self: *Self, v: Visible, lo: i32, hi: i32, foreground: bool, forward: bool) !void {
     const tile_w = self.tileWidth(v.width);
     const strip_h = self.stripHeight();
@@ -830,8 +764,6 @@ fn lookAhead(self: *Self, start: i32, forward: bool, distance: i32) !void {
     }
 }
 
-/// Replace queued work on a viewport change. A completed image is admitted
-/// only if its generation and strip are still wanted by the current plan.
 pub fn present(self: *Self, w: *Writer, worker: *RenderWorker, show: bool) !bool {
     const frame: Frame = .{
         .show = show and self.ready() and self.zoom > 0,
@@ -876,8 +808,7 @@ pub fn present(self: *Self, w: *Writer, worker: *RenderWorker, show: bool) !bool
         }
         for (units) |v| try self.collect(v, 0, self.height, true, true);
         if (self.transport == .tmux and frame.show and (moved or repaint_tiles)) {
-            // Publish placeholder cells only after every visible strip is
-            // prepared, so tmux gets one screen update per viewport swap.
+            // One screen update per viewport swap, for tmux.
             for (self.requests[0..self.request_count]) |request| {
                 if (request.visible) {
                     self.holding_viewport = true;
@@ -891,8 +822,6 @@ pub fn present(self: *Self, w: *Writer, worker: *RenderWorker, show: bool) !bool
         }
     }
 
-    // A reload or zoom can invalidate images that are still holding the
-    // screen. Keep their IDs queued for deletion with the viewport swap.
     var retired: usize = 0;
     for (self.doomed.items) |id| {
         if (self.holding_viewport and self.placed.contains(id)) {
@@ -952,8 +881,7 @@ pub fn present(self: *Self, w: *Writer, worker: *RenderWorker, show: bool) !bool
         self.tile_bytes += request.bytes;
     }
 
-    // Keep the old image placements until the entire replacement viewport
-    // can be placed in one terminal update.
+    // Keep old placements until the whole new viewport can be placed at once.
     var syncing = false;
     const swapping_viewport = self.holding_viewport;
     if (swapping_viewport) {
@@ -997,8 +925,7 @@ pub fn present(self: *Self, w: *Writer, worker: *RenderWorker, show: bool) !bool
         changed = true;
         if (self.transport == .direct) {
             try sync(w, &syncing);
-            // Retain the cached pixels. Older Kitty graphics implementations
-            // could leak a placement when a put reused its ID.
+            // Keep the pixels; older Kitty leaks a placement when a put reuses its ID.
             if (previous != null) try w.print("\x1b_Ga=d,d=i,i={d},p=1,q=2\x1b\\", .{p.id});
             try self.place(w, p, 1, below_backgrounds - 2);
         }
@@ -1068,8 +995,6 @@ fn place(self: *Self, w: *Writer, p: Placement, placement: u32, z: i32) !void {
     });
 }
 
-// Reuse one small translucent image per overlay color. Cropping and
-// repeating its placements keeps base tile pixels independent of the query.
 fn presentHighlights(self: *Self, w: *Writer, units: []const Visible) !void {
     for (self.overlay_images, &self.overlay_placed) |image, *placed| {
         if (placed.*) try unplace(w, image.?);
@@ -1143,8 +1068,7 @@ fn disposeImage(self: *Self, w: *Writer, id: u32) !void {
     if (self.files.fetchRemove(id)) |entry| {
         entry.value.image.deinit(self.allocator);
         if (entry.value.sent) {
-            // The old placeholder grid can still be on screen when the
-            // replacement is queued. Retire its images after the redraw.
+            // The old placeholder grid may still be on screen; retire its images after the redraw.
             try self.retired_images.append(self.allocator, id);
             self.retire_timer = try std.time.Timer.start();
         }
@@ -1176,8 +1100,7 @@ pub fn tmuxDelay(self: *Self) ?u64 {
     return @min(replay.?, retire.?);
 }
 
-/// tmux can discard passthrough while a client is redrawing. Replay new
-/// visible uploads once, after the placeholder cells have reached the pane.
+/// tmux can drop passthrough while a client redraws; replay new uploads once.
 pub fn maintainTmuxImages(self: *Self, w: *Writer) !void {
     var batch: Graphics.TmuxBatch = .{ .writer = w };
     if (remaining(&self.retire_timer, retire_delay) == 0) try self.deleteRetired(&batch);
@@ -1212,8 +1135,6 @@ fn touch(self: *Self, key: TileKey, tile: *Tile) void {
     self.appendNewest(key, tile);
 }
 
-// Reserve before transmitting. The displayed and incoming viewports can
-// temporarily share space during a swap. Prefetch stays within the budget.
 fn reserve(self: *Self, w: *Writer, bytes: usize, foreground: bool) !bool {
     var candidate = self.oldest;
     while (self.tile_bytes + bytes > self.budget()) {

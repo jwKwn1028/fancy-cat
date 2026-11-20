@@ -10,8 +10,7 @@ pub fn delete(w: *Writer, id: u32) !void {
     try w.print("\x1b_Ga=d,d=I,i={d},q=2\x1b\\", .{id});
 }
 
-/// tmux resets terminal modes after each passthrough envelope. Send a frame's
-/// image commands together to keep those resets out of the middle of the batch.
+/// tmux resets modes after each passthrough envelope; batch a frame's images.
 pub const TmuxBatch = struct {
     writer: *Writer,
     started: bool = false,

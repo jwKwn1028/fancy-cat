@@ -245,8 +245,7 @@ fn clearPending(self: *Self) void {
     self.count = 0;
 }
 
-/// When rendering, allow the worker to wake the view early, but check the
-/// terminal's separate input queue again within one millisecond.
+/// Rendering can wake the view early; input is checked again within 1 ms.
 pub fn waitForWork(self: *Self) bool {
     self.mutex.lock();
     defer self.mutex.unlock();

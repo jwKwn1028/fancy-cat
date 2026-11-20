@@ -40,6 +40,8 @@ class Viewer:
         self.placements = {}  # (id, p) -> (row, col, X, Y, x, y, w, h)
         self.transmits = 0
         self.pixel_mouse = pixel_mouse
+        # Ignore an outer tmux; test_tmux starts its own.
+        env = {k: v for k, v in env.items() if k not in ("TMUX", "TMUX_PANE")}
         pid, fd = pty.fork()
         if pid == 0:
             fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, XPIX, YPIX))
@@ -47,7 +49,6 @@ class Viewer:
         self.pid, self.fd = pid, fd
         self.status = None
 
-    # --- output parsing -------------------------------------------------
     def apc(self, body):
         if not body.startswith("G"):
             return
@@ -154,7 +155,6 @@ class Viewer:
                 self.c += 1
                 i += 1
 
-    # --- driving ----------------------------------------------------------
     def pump(self, seconds):
         deadline = time.time() + seconds
         while True:

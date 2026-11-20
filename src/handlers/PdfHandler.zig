@@ -20,7 +20,6 @@ dual_page: bool = false,
 // Degrees clockwise: 0, 90, 180 or 270.
 rotation: u16 = 0,
 picture_cache: [2]?PageRects = .{ null, null },
-// The active search, if any: its text, direction and the hit shown last.
 search_needle: ?[:0]u8 = null,
 search_backward: bool = false,
 search_hit: ?Hit = null,
@@ -92,15 +91,13 @@ pub fn toggleColor(self: *Self) void {
     self.config.general.colorize = !self.config.general.colorize;
 }
 
-// Space between the two pages of a spread, in PDF points.
 const page_gap = 6.0;
 
 pub fn toggleDualPage(self: *Self) void {
     self.dual_page = !self.dual_page;
 }
 
-// The pages in each column of the spread holding `page`. With
-// first_page_column 2, zathura's default, page 1 sits alone on the right.
+// With first_page_column 2, zathura's default, page 1 sits alone on the right.
 pub fn spread(self: *Self, page: u16) [2]?u16 {
     const first: u32 = if (self.config.general.first_page_column == 1) 0 else 1;
     const slot = @as(u32, page) + first;
@@ -117,7 +114,6 @@ pub fn rotateClockwise(self: *Self) void {
 
 // The view scrolls through units: single pages, or spreads in two-page mode.
 
-/// The first page of the unit holding `page`.
 pub fn unitOf(self: *Self, page: u16) u16 {
     if (!self.dual_page) return page;
     const columns = self.spread(page);
@@ -148,7 +144,7 @@ pub fn lastUnit(self: *Self) u16 {
     return self.unitOf(self.total_pages - 1);
 }
 
-/// Renders one base strip. The worker owns the pixmap and its MuPDF context.
+/// The worker owns the pixmap and its MuPDF context.
 pub fn renderTile(self: *Self, unit: u16, zoom: f32, area: c.fz_irect) ?[*c]c.fz_pixmap {
     if (unit >= self.total_pages) return null;
     const loaded = self.loadSpread(unit) orelse return null;
@@ -162,7 +158,6 @@ pub fn renderTile(self: *Self, unit: u16, zoom: f32, area: c.fz_irect) ?[*c]c.fz
     defer if (!keep_pixmap) c.fz_drop_pixmap(self.ctx, pix);
     defer c.fz_drop_device(self.ctx, dev);
 
-    // From layout points to this tile's pixels.
     const ctm = c.fz_concat(
         c.fz_scale(zoom, zoom),
         c.fz_translate(-@as(f32, @floatFromInt(area.x0)), -@as(f32, @floatFromInt(area.y0))),
@@ -196,8 +191,7 @@ const PageList = struct {
     list: *c.fz_display_list,
 };
 
-// A page's drawing commands, recorded once so each strip replays only its
-// part instead of interpreting the whole page again.
+// Recorded once, so each strip replays only its part of the page.
 fn displayList(self: *Self, page: [*c]c.fz_page, number: u16) ?*c.fz_display_list {
     for (self.lists) |entry| {
         if (entry) |cached| {
@@ -218,7 +212,6 @@ fn dropLists(self: *Self) void {
     }
 }
 
-/// A point on `page`, in the page's own coordinates, in its unit's layout.
 pub fn layoutPoint(self: *Self, page: u16, x: f32, y: f32) ?c.fz_point {
     const layout = self.layoutOf(page) orelse return null;
     for (layout.columns) |column| {
@@ -228,7 +221,6 @@ pub fn layoutPoint(self: *Self, page: u16, x: f32, y: f32) ?c.fz_point {
     return null;
 }
 
-/// A search hit's rectangle in its unit's layout.
 pub fn hitRect(self: *Self, hit: Hit) ?c.fz_rect {
     const hits = self.hitsOn(hit.page);
     if (hit.index >= hits.len) return null;
@@ -243,7 +235,6 @@ pub fn hitRect(self: *Self, hit: Hit) ?c.fz_rect {
 
 pub const Column = struct {
     page: u16,
-    // From the page's coordinates to the layout's.
     transform: c.fz_matrix,
     bounds: c.fz_rect,
 };
@@ -296,7 +287,6 @@ fn dropText(self: *Self) void {
     }
 }
 
-/// A character's quad under the pointer. Whitespace can start a pan.
 pub fn textAt(self: *Self, number: u16, point: c.fz_point) ?c.fz_quad {
     const text = self.textOn(number, false) orelse return null;
     var quad: c.fz_quad = undefined;
@@ -335,13 +325,11 @@ pub fn copySelection(self: *Self, number: u16, a: c.fz_point, b: c.fz_point) ?[*
     return c.fz_copy_selection_z(self.ctx, text, a, b);
 }
 
-/// Expands the endpoints to the edges of the word.
 pub fn snapWord(self: *Self, number: u16, a: *c.fz_point, b: *c.fz_point) void {
     const text = self.textOn(number, false) orelse return;
     c.fz_snap_word_z(self.ctx, text, a, b);
 }
 
-/// Where the pages of a spread sit, rotated, in one coordinate space.
 pub const Layout = struct {
     columns: [2]?Column = .{ null, null },
     width: f32 = 0,
@@ -365,8 +353,7 @@ const PageRects = struct {
     rects: [max_pictures]c.fz_rect,
 };
 
-// The pictures on a page, from a two-entry cache. The slice is valid until
-// the next call.
+// From a two-entry cache; the slice is valid until the next call.
 fn pictureRects(self: *Self, page: [*c]c.fz_page, number: u16) []const c.fz_rect {
     for (&self.picture_cache) |*entry| {
         if (entry.*) |*cached| {
@@ -398,8 +385,7 @@ fn rgbOf(color: i32) [3]f64 {
     };
 }
 
-// zathura's colorumax: how far a color can move along hue h from lightness l
-// before a channel leaves [0, 1], scaled for the interval [l1, l2].
+// zathura's colorumax, scaled for the interval [l1, l2].
 fn colorumax(h: [3]f64, l: f64, l1: f64, l2: f64) f64 {
     if (@abs(h[0]) <= epsilon and @abs(h[1]) <= epsilon and @abs(h[2]) <= epsilon) return 0;
     if (@abs(l2 - l1) <= epsilon) return 0;
@@ -420,8 +406,7 @@ fn colorumax(h: [3]f64, l: f64, l1: f64, l2: f64) f64 {
     return @min(u, v);
 }
 
-// zathura's recolor-keephue for opaque colors: white becomes the light color,
-// black the dark one, and other colors keep their hue and saturation.
+// zathura's recolor-keephue for opaque colors.
 fn recolorPixel(rgb: [3]f64, dark: [3]f64, light: [3]f64) [3]u8 {
     const l1 = lightness(dark);
     const l2 = lightness(light);
@@ -443,7 +428,6 @@ fn recolorPixel(rgb: [3]f64, dark: [3]f64, light: [3]f64) [3]u8 {
     return out;
 }
 
-// With recolor_reverse_video, pictures keep their colors, as in zathura.
 fn recolorKeepHue(self: *Self, pix: [*c]c.fz_pixmap, loaded: LoadedSpread, layout: Layout, ctm: c.fz_matrix) void {
     const dark = rgbOf(self.config.general.black);
     const light = rgbOf(self.config.general.white);
@@ -465,8 +449,7 @@ fn recolorKeepHue(self: *Self, pix: [*c]c.fz_pixmap, loaded: LoadedSpread, layou
     const height: usize = @intCast(c.fz_pixmap_height(self.ctx, pix));
     const stride: usize = @intCast(c.fz_pixmap_stride(self.ctx, pix));
     const samples = c.fz_pixmap_samples(self.ctx, pix);
-    // Text pages hold few colors, so remember each one's result; a key's top
-    // bit marks the slot as filled.
+    // Text pages hold few colors; a key's top bit marks a filled slot.
     const slots = 4096;
     var memo_key = [_]u32{0} ** slots;
     var memo_out: [slots][3]u8 = undefined;
@@ -566,8 +549,6 @@ pub const Search = struct {
 
     pub const Progress = union(enum) { hit: Hit, none, pending };
 
-    /// Search one page. A repeat that reaches its starting page wraps to
-    /// the first or last match there.
     pub fn advance(self: *Search, pdf: *Self) Progress {
         const total: u32 = pdf.total_pages;
         if (self.step >= total + @as(u32, @intFromBool(self.from != null))) return .none;
@@ -595,8 +576,7 @@ const PageMarks = struct {
     rect: c.fz_rect,
 };
 
-// A page's area in its own coordinates: its bounds, or with trim_margins what
-// is printed on it plus trim_padding, so the PDF's white margins take no room.
+// With trim_margins, only what is printed, plus trim_padding.
 fn pageBox(self: *Self, page: [*c]c.fz_page, number: u16) ?c.fz_rect {
     var bounds: c.fz_rect = undefined;
     if (c.fz_bound_page_z(self.ctx, page, &bounds) == 0) return null;
@@ -607,7 +587,6 @@ fn pageBox(self: *Self, page: [*c]c.fz_page, number: u16) ?c.fz_rect {
     return if (c.fz_is_empty_rect(box) != 0) bounds else box;
 }
 
-// What is printed on a page, from a small cache; measuring runs the page.
 fn pageMarks(self: *Self, page: [*c]c.fz_page, number: u16) c.fz_rect {
     for (self.marks_cache) |entry| {
         if (entry) |cached| {
@@ -620,13 +599,11 @@ fn pageMarks(self: *Self, page: [*c]c.fz_page, number: u16) c.fz_rect {
     return rect;
 }
 
-/// Turns margin trimming on or off and fits the zoom again.
 pub fn toggleTrim(self: *Self) void {
     self.config.general.trim_margins = !self.config.general.trim_margins;
 }
 
-// Two-page mode loads the spread holding page_number; either column may be
-// empty. Null when MuPDF cannot load a page yet, as while the file is written.
+// Either column may be empty. Null while MuPDF cannot load a page yet.
 fn loadSpread(self: *Self, page_number: u16) ?LoadedSpread {
     const numbers = if (self.dual_page) self.spread(page_number) else [2]?u16{ page_number, null };
     var loaded = LoadedSpread{ .numbers = numbers, .pages = .{ null, null } };
@@ -641,9 +618,6 @@ fn loadSpread(self: *Self, page_number: u16) ?LoadedSpread {
     return loaded;
 }
 
-// Rotates each page and sets the pages side by side with their tops aligned,
-// so trimmed pages line up. An empty column keeps the other page's width, as
-// in zathura.
 fn computeLayout(self: *Self, loaded: LoadedSpread) ?Layout {
     const turn = c.fz_rotate(@floatFromInt(self.rotation));
     const empty = c.fz_rect{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0 };
@@ -675,7 +649,6 @@ fn computeLayout(self: *Self, loaded: LoadedSpread) ?Layout {
     return layout;
 }
 
-/// The layout of the spread holding page_number, as it would be drawn now.
 pub fn layoutOf(self: *Self, page_number: u16) ?Layout {
     const loaded = self.loadSpread(page_number) orelse return null;
     defer loaded.deinit(self.ctx);

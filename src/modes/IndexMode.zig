@@ -1,6 +1,3 @@
-//! The document outline, opened with Tab as zathura's index: j/k move, l/h
-//! open and close entries, gg/G go to the first and last, Enter jumps, and
-//! Tab, Escape or q close it.
 const Self = @This();
 const std = @import("std");
 const vaxis = @import("vaxis");
@@ -13,14 +10,13 @@ const Entry = struct {
     depth: u16,
     // 0-based, or -1 for entries without a page in this document.
     page: i32,
-    // The page number as drawn; drawn text must outlive the frame.
+    // Drawn text must outlive the frame.
     number: [12]u8 = undefined,
     number_len: u8 = 0,
 };
 
 context: *Context,
 outline: [*c]c.fz_outline,
-// The visible entries; children show while their parent is open.
 entries: std.ArrayList(Entry) = .{},
 selected: usize = 0,
 top: usize = 0,
@@ -41,7 +37,6 @@ pub fn init(context: *Context) ?Self {
         self.deinit();
         return null;
     }
-    // Start on the last entry at or before the current page.
     const current: i32 = context.currentPage();
     for (self.entries.items, 0..) |entry, i| {
         if (entry.page >= 0 and entry.page <= current) self.selected = i;
@@ -106,7 +101,6 @@ fn setOpen(self: *Self, open: bool) !void {
     try self.rebuild();
 }
 
-// h closes an open entry, or moves to the parent of a closed one.
 fn close(self: *Self) !void {
     const entry = self.entries.items[self.selected];
     if (entry.node.*.down != null and entry.node.*.is_open != 0) return self.setOpen(false);
@@ -120,7 +114,6 @@ fn close(self: *Self) !void {
     }
 }
 
-// Goes to the entry's page and position, and back to the page view.
 fn jump(self: *Self) void {
     const entry = self.entries.items[self.selected];
     if (entry.page < 0) return;

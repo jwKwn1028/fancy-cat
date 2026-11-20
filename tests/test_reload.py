@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-test-reload-") as directory:
         assert pixels(viewer) == b"\0\0\xff", "uncached page failed from the saved PDF"
         assert initial_ids.isdisjoint(viewer.placements), "old snapshot did not render the new position"
         snapshot_ids = {i for i, _ in viewer.placements}
-        # Supply a valid shorter PDF. The renderer should clamp the current page.
+        # A valid shorter PDF: the current page must clamp.
         source.write_bytes(pdf_bytes(2, "1 0 0"))
         before = len(viewer.raw)
         viewer.pump(0.6)
@@ -104,8 +104,7 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-test-reload-") as directory:
             upload = delta.index(f",i={image},q=2,m=".encode())
             assert upload < old_delete, "visible contents dropped before a replacement tile arrived"
 
-        # If the path disappears beyond the timeout, allow quit and further
-        # navigation while retaining the last PDF, then detect its reappearance.
+        # Past the timeout, keep the last PDF usable and detect the file's return.
         source.unlink()
         viewer.pump(1.1)
         assert ERROR in viewer.text(), viewer.text()

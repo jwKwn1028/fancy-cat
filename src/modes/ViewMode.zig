@@ -9,12 +9,10 @@ const View = @import("../View.zig");
 const c = @import("../handlers/PdfHandler.zig").c;
 
 context: *Context,
-// Keys of a sequence such as `gg` typed so far, and a count such as the 5 in
-// `5J`.
+// Keys of a sequence such as `gg`, and a count such as the 5 in `5J`.
 pending: [Config.max_sequence]vaxis.Key = undefined,
 pending_len: u8 = 0,
 count: ?u32 = null,
-// After m or ', the next key names a mark.
 mark: ?enum { set, jump } = null,
 last_zoom_ms: i64 = 0,
 gesture: ?Gesture = null,
@@ -33,12 +31,10 @@ const Click = struct { position: c.fz_point, page: u16, timer: std.time.Timer };
 const drag_threshold = 3;
 const double_click_ns = 350 * std.time.ns_per_ms;
 
-// Terminals send a burst of wheel events per notch (Ghostty's
-// mouse-scroll-multiplier); Ctrl+wheel zooms once per burst.
+// Wheel events come in bursts per notch; Ctrl+wheel zooms once per burst.
 const zoom_notch_ms = 40;
 
 const Action = struct {
-    // A KeyMap field name.
     name: []const u8,
     run: *const fn (*Context, ?u32) void,
     scrolls: bool = false,
@@ -146,8 +142,7 @@ pub fn handleKeyStroke(self: *Self, key: vaxis.Key, km: Config.KeyMap) !void {
     self.reset();
 }
 
-// Runs the action whose binding the pending keys complete. Returns true when
-// one ran or when the keys begin a longer binding.
+// True when an action ran or the keys begin a longer binding.
 fn dispatch(self: *Self, km: Config.KeyMap) bool {
     const typed = self.pending[0..self.pending_len];
     var waiting = false;
@@ -171,8 +166,7 @@ fn dispatch(self: *Self, km: Config.KeyMap) bool {
                 const count = self.count;
                 const ctx = self.context;
                 self.reset();
-                // The action may switch modes, which replaces this ViewMode,
-                // so nothing may touch self afterwards.
+                // The action may replace this ViewMode; don't touch self after.
                 if (!action.scrolls) ctx.finishScroll();
                 action.run(ctx, count);
                 return true;
@@ -207,13 +201,11 @@ fn prevPage(s: *Context, count: ?u32) void {
     s.view.turn(false, countOf(count));
 }
 
-// gg: the first page, or page N with a count.
 fn firstPage(s: *Context, count: ?u32) void {
     s.view.recordJump();
     s.view.goToPage(@intCast(@min(countOf(count), 65535) - 1));
 }
 
-// G: the end of the document, or page N with a count.
 fn lastPage(s: *Context, count: ?u32) void {
     s.view.recordJump();
     if (count) |n| {
@@ -223,7 +215,6 @@ fn lastPage(s: *Context, count: ?u32) void {
     }
 }
 
-// Scrolling runs on across pages, as in zathura's continuous view.
 fn scrollBy(s: *Context, steps: f32) void {
     s.scroll(steps * s.config.general.scroll_step);
 }
@@ -268,7 +259,6 @@ fn scrollRightMult(s: *Context, count: ?u32) void {
     panBy(s, s.config.general.scroll_mult * amount(count));
 }
 
-// Zathura's half and full scrolls move by half or all of the view.
 fn scrollView(s: *Context, vertical: bool, fraction: f32, count: ?u32) void {
     const size: f32 = @floatFromInt(if (vertical) s.view.height else s.view.width);
     const by = size * fraction * amount(count);
@@ -366,7 +356,6 @@ fn bestFit(s: *Context, _: ?u32) void {
     s.view.fit(false);
 }
 
-// D: page 1 alone on the right of spreads, or paired with page 2.
 fn cycleFirstColumn(s: *Context, _: ?u32) void {
     const general = &s.config.general;
     general.first_page_column = if (general.first_page_column == 1) 2 else 1;
@@ -379,7 +368,6 @@ fn dualPage(s: *Context, _: ?u32) void {
     s.view.layoutChanged(page);
 }
 
-// r: a quarter turn clockwise, as in zathura.
 fn rotate(s: *Context, _: ?u32) void {
     s.document_handler.pdf_handler.rotateClockwise();
     s.view.layoutChanged(s.currentPage());
@@ -399,7 +387,6 @@ fn searchBackward(s: *Context, _: ?u32) void {
     prompt(s, .search_backward);
 }
 
-// n and N repeat the search, with a count as many times.
 fn searchNext(s: *Context, count: ?u32) void {
     s.searchAgain(false, countOf(count));
 }
@@ -465,7 +452,6 @@ pub fn handleMouse(self: *Self, mouse: vaxis.Mouse) !void {
         return;
     }
     if (mouse.type != .press) return;
-    // Shift+wheel and sideways wheel pan. Ctrl+wheel zooms once per notch.
     const s = self.context;
     const step = s.config.general.wheel_step;
     switch (mouse.button) {
@@ -501,8 +487,7 @@ fn handleLeftMouse(self: *Self, mouse: vaxis.Mouse) !void {
     const s = self.context;
     const view = &s.view;
     const pdf = &s.document_handler.pdf_handler;
-    // Finish an existing drag while its highlight is being prepared.
-    // A fresh click must wait for the new view to appear.
+    // A drag can finish while its highlight is prepared; a fresh click waits for the view.
     if (view.holding_viewport and (mouse.type == .press or self.gesture == null)) return;
     if (view.cell_w <= 0 or view.cell_h <= 0) return;
     const pixel = s.vx.state.pixel_mouse;
@@ -517,7 +502,6 @@ fn handleLeftMouse(self: *Self, mouse: vaxis.Mouse) !void {
             self.gesture = null;
             if (position.x >= @as(f32, @floatFromInt(view.width)) or
                 position.y >= @as(f32, @floatFromInt(view.height))) return;
-            // The click refers to the frame on screen, so stop pending easing.
             s.scroll_animation = null;
             s.clearMessage();
             pdf.clearSelection();
@@ -553,8 +537,7 @@ fn handleLeftMouse(self: *Self, mouse: vaxis.Mouse) !void {
                         click.timer.read() <= double_click_ns)
                     {
                         self.last_click = null;
-                        // Put both ends inside the clicked glyph, so a click
-                        // on the last glyph of a word stays in that word.
+                        // Both ends inside the clicked glyph, so a click on a word's last glyph stays in it.
                         var a = glyphEdge(quad.ul, quad.ll, quad.ur, quad.lr);
                         var b = glyphEdge(quad.ur, quad.lr, quad.ul, quad.ll);
                         pdf.snapWord(page.page, &a, &b);

@@ -50,9 +50,7 @@ pub const Context = struct {
     current_reload_indicator_state: ReloadIndicatorState,
     reload_indicator_active: bool,
     buf: []u8,
-    // For remembering the last page; null if the path cannot be resolved.
     absolute_path: ?[]u8,
-    // A one-line notice on the bottom row, such as an unknown command.
     message_buf: [256]u8 = undefined,
     message_len: usize = 0,
     tmux_cell: ?Tmux.CellSize = null,
@@ -61,9 +59,7 @@ pub const Context = struct {
     search_task: ?SearchTask = null,
     preview_current: bool = false,
     repeats: std.ArrayList(Repeat) = .empty,
-    // Where an incremental search prompt opened.
     search_origin: ?View.Position = null,
-    // Pixel deltas for the next three frames.
     scroll_animation: ?[3]f32 = null,
 
     const Repeat = struct { reverse: bool, count: u32 };
@@ -194,8 +190,7 @@ pub const Context = struct {
         defer if (self.view.transport == .tmux) {
             self.tty.writer().writeAll("\x1b[?1004l\x1b[>4;0m") catch {};
         };
-        // The view places its own images. Left on, vaxis would delete every
-        // placement at the start of each frame.
+        // The view places its own images; vaxis would delete them every frame.
         self.vx.caps.kitty_graphics = false;
         try self.vx.setMouseMode(self.tty.writer(), true);
 
@@ -275,8 +270,6 @@ pub const Context = struct {
             }
             if (wheel != 0 and (wheel_clock == null or wheel_clock.?.read() >= tmux_wheel_interval)) {
                 self.flushWheel(&wheel);
-                // The first event moves immediately. Merge later reports
-                // within the same interval before redrawing the pane again.
                 if (self.view.transport == .tmux) wheel_clock = try std.time.Timer.start();
             }
             if (self.should_quit) break;
@@ -317,7 +310,6 @@ pub const Context = struct {
         count.* = 0;
     }
 
-    /// Queue smooth vertical movement, or move directly for large counts.
     pub fn scroll(self: *Self, pixels: f32) void {
         if (!self.config.general.smooth_scroll) {
             self.view.scrollBy(pixels);
@@ -334,8 +326,6 @@ pub const Context = struct {
             return;
         }
 
-        // Add 60%, 30% and 10% to the existing frame schedule. Round the
-        // cumulative distance so the three contributions always sum to the input.
         const first = @round(distance * 0.6);
         const second = @round(distance * 0.9);
         self.scroll_animation = .{
@@ -345,7 +335,6 @@ pub const Context = struct {
         };
     }
 
-    /// Finish queued movement before an action that depends on the position.
     pub fn finishScroll(self: *Self) void {
         if (self.scroll_animation) |frames| {
             self.scroll_animation = null;
@@ -365,7 +354,6 @@ pub const Context = struct {
         const unit = self.view.unit;
         const y = self.view.y;
         self.view.scrollBy(delta);
-        // At the edge, drop queued movement further into the edge.
         if (self.view.unit == unit and self.view.y == y and
             delta * frames[1] >= 0 and delta * frames[2] >= 0)
         {
@@ -380,6 +368,7 @@ pub const Context = struct {
         if (tmux and try self.view.present(buffered, worker, self.current_mode != .index)) self.ui_dirty = true;
         if (self.ui_dirty or page != self.status_page) {
             try self.draw();
+            // Synchronized output keeps tmux < 3.8 from dropping placeholder diacritics.
             try self.vx.render(buffered);
             self.ui_dirty = false;
             self.status_page = page;
@@ -402,7 +391,6 @@ pub const Context = struct {
         }
     }
 
-    /// Opens the outline, or says the document has none.
     pub fn openIndex(self: *Self) void {
         const index = IndexMode.init(self) orelse {
             self.showMessage("This document has no index", .{});
@@ -413,7 +401,6 @@ pub const Context = struct {
         self.ui_dirty = true;
     }
 
-    /// Labels the links in view, to follow, show or copy one.
     pub fn openHints(self: *Self, kind: HintMode.Kind) void {
         const hints = HintMode.init(self, kind) orelse {
             self.showMessage("No links in view", .{});
@@ -424,7 +411,6 @@ pub const Context = struct {
         self.ui_dirty = true;
     }
 
-    /// For view and command modes; openIndex and openHints start the others.
     pub fn changeMode(self: *Self, new_state: ModeType) void {
         self.leaveMode();
         self.ui_dirty = true;
@@ -439,12 +425,10 @@ pub const Context = struct {
     pub fn handleKeyStroke(self: *Self, key: vaxis.Key) !void {
         const km = self.config.key_map;
 
-        // Ghostty reports Shift and the other modifiers as keys of their own;
-        // they must not cancel a count or a key sequence.
+        // Ghostty reports modifiers as keys; they must not cancel a count or sequence.
         if (key.isModifier()) return;
 
-        // Ctrl+c quits from any mode; the quit binding works in view mode, so
-        // its key stays typable in the command line.
+        // Ctrl+c quits from any mode; the quit binding only in view mode, so it stays typable.
         if (key.matches('c', .{ .ctrl = true })) {
             self.should_quit = true;
             return;
@@ -490,11 +474,9 @@ pub const Context = struct {
     }
 
     pub fn drawStatusBar(self: *Self, win: vaxis.Window) !void {
-        // The arena outlives the render, which still reads the text printed
-        // here; the run loop resets it afterwards.
+        // The render still reads this text; the run loop resets the arena after.
         const arena = self.arena.allocator();
 
-        // Move above the bottom row only while a prompt or message uses it.
         const bottom_rows: u16 = if (self.current_mode == .command or self.message_len > 0) 2 else 1;
         const status_bar = win.child(.{
             .x_off = 0,
@@ -636,7 +618,6 @@ pub const Context = struct {
         const win = self.vx.window();
         win.clear();
 
-        // The index covers the window; no page image is placed meanwhile.
         if (self.current_mode == .index) {
             self.current_mode.index.draw(win);
             return;
@@ -652,7 +633,6 @@ pub const Context = struct {
             try self.drawStatusBar(win);
         }
 
-        // Prompts and notices use the same colors as the status bar.
         const style = self.config.status_bar.style;
         if (self.current_mode == .command) {
             const bar = win.child(.{ .x_off = 0, .y_off = win.height -| 1, .width = win.width, .height = 1 });
@@ -717,13 +697,10 @@ pub const Context = struct {
         if (self.config.general.progress_bar) try self.tty.writer().writeAll("\x1b]9;4;0;0\x07");
     }
 
-    /// Copies through the terminal (OSC 52), which tmux passes on with
-    /// set-clipboard on.
     pub fn copyToClipboard(self: *Self, text: []const u8) void {
         self.vx.copyToSystemClipboard(self.tty.writer(), text, self.allocator) catch {};
     }
 
-    /// Opens external URIs, or jumps to an internal link's page and position.
     pub fn followLink(self: *Self, uri: [:0]const u8) void {
         const pdf = &self.document_handler.pdf_handler;
         const c = PdfHandler.c;
@@ -766,7 +743,6 @@ pub const Context = struct {
         return self.view.currentUnit();
     }
 
-    /// Sizes the view to the window, less the status bar's rows.
     pub fn layoutView(self: *Self) void {
         const screen = self.vx.screen;
         const reserved: u16 = if (self.config.status_bar.enabled) 1 else 0;
@@ -777,7 +753,6 @@ pub const Context = struct {
         }
     }
 
-    /// With incremental search, remembers where a search prompt opened.
     pub fn beginSearchPrompt(self: *Self) void {
         self.search_task = null;
         self.repeats.clearRetainingCapacity();
@@ -792,7 +767,6 @@ pub const Context = struct {
         self.preview_current = false;
     }
 
-    /// Escape in a search prompt returns to where it opened.
     pub fn cancelSearchPrompt(self: *Self) void {
         self.invalidateSearchPreview();
         const origin = self.search_origin orelse return;
@@ -817,7 +791,6 @@ pub const Context = struct {
         };
     }
 
-    /// Starts a search, reusing a matching preview when Enter commits it.
     pub fn search(self: *Self, needle: []const u8, backward: bool) void {
         const origin = self.search_origin;
         self.search_origin = null;
@@ -880,8 +853,7 @@ pub const Context = struct {
         };
     }
 
-    // Yield at page boundaries so even a search that wraps through the whole
-    // document leaves time for input and completed render jobs.
+    // Yield at page boundaries, so a long search leaves time for input and renders.
     fn advanceSearch(self: *Self, loop: *vaxis.Loop(Event)) bool {
         var timer = std.time.Timer.start() catch return false;
         const pdf = &self.document_handler.pdf_handler;

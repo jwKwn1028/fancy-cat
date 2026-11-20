@@ -30,3 +30,5 @@ lima.yaml
 *.log
 *.epub
 __pycache__/
+
+commitmsg.txt

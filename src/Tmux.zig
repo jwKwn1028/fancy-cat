@@ -7,8 +7,7 @@ pub const Client = struct {
     inline_graphics: bool,
 };
 
-/// TERM_PROGRAM describes tmux itself in a pane. Read the attached client's
-/// terminal identity and cell size directly from tmux.
+/// TERM_PROGRAM names tmux in a pane, so ask tmux for the client's terminal.
 pub fn client(allocator: std.mem.Allocator) ?Client {
     if (std.posix.getenv("SSH_CONNECTION")) |ssh| if (ssh.len != 0) return null;
     const tmux = std.posix.getenv("TMUX") orelse return null;
@@ -53,7 +52,6 @@ fn styleOf(id: u32) vaxis.Cell.Style {
     return .{ .fg = .{ .rgb = .{ @truncate(id >> 16), @truncate(id >> 8), @truncate(id) } } };
 }
 
-/// A placeholder cell naming image row `row` and column `col` explicitly.
 fn fullCell(arena: std.mem.Allocator, id: u32, row: usize, col: usize) !vaxis.Cell {
     const glyph = try arena.alloc(u8, max_grapheme);
     @memcpy(glyph[0..placeholder.len], placeholder);
@@ -66,9 +64,7 @@ fn fullCell(arena: std.mem.Allocator, id: u32, row: usize, col: usize) !vaxis.Ce
     return .{ .char = .{ .grapheme = glyph[0..length], .width = 1 }, .style = styleOf(id) };
 }
 
-/// Only each row's first cell names its image row and column; the rest are
-/// bare and continue the run to their left. Bare cells stay identical while
-/// the PDF scrolls, so vaxis and tmux redraw just the first column.
+/// Bare cells continue the run to their left, so scrolling redraws only the first column.
 pub fn drawTile(win: vaxis.Window, arena: std.mem.Allocator, id: u32, x: u16, y: u16, sx: u16, sy: u16, cols: u16, rows: u16) !void {
     if (cols == 0) return;
     const bare: vaxis.Cell = .{ .char = .{ .grapheme = placeholder, .width = 1 }, .style = styleOf(id) };
@@ -79,8 +75,6 @@ pub fn drawTile(win: vaxis.Window, arena: std.mem.Allocator, id: u32, x: u16, y:
     }
 }
 
-/// After overlays (hint labels) cover cells, a bare cell right of one has no
-/// run to continue: give it its image row and column again.
 pub fn repairRuns(win: vaxis.Window, arena: std.mem.Allocator, id: u32, x: u16, y: u16, sx: u16, sy: u16, cols: u16, rows: u16) !void {
     const style = styleOf(id);
     for (0..rows) |row| {

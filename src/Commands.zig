@@ -1,4 +1,3 @@
-//! Commands typed after ':' and run by keys mapped in the config's "Maps".
 const std = @import("std");
 const Context = @import("Context.zig").Context;
 const Spawn = @import("utilities/Spawn.zig");
@@ -59,8 +58,7 @@ fn scroll(ctx: *Context, cmd: []const u8) bool {
     }
 }
 
-// exec CMD: runs CMD with sh, detached, with $FILE set to the document and
-// $PAGE to the current page, as zathura's :exec does.
+// exec CMD: runs CMD with sh, detached, with $FILE and $PAGE set, as zathura's :exec.
 fn exec(ctx: *Context, cmd: []const u8) bool {
     const prefix = "exec ";
     if (!std.mem.startsWith(u8, cmd, prefix)) return false;

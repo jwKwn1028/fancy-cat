@@ -1,5 +1,4 @@
-//! Remembers the last page of each document, as zathura's history does.
-//! Each line of $XDG_STATE_HOME/fancy-cat/positions is "PAGE\tPATH".
+//! Last pages, as "PAGE\tPATH" lines in $XDG_STATE_HOME/fancy-cat/positions.
 const std = @import("std");
 
 const max_entries = 1000;
@@ -32,7 +31,6 @@ pub fn load(allocator: std.mem.Allocator, document: []const u8) ?u16 {
     return page;
 }
 
-/// Records `page` for `document`, keeping the newest max_entries documents.
 pub fn save(allocator: std.mem.Allocator, document: []const u8, page: u16) void {
     if (std.mem.indexOfAny(u8, document, "\t\n") != null) return;
     const path = filePath(allocator) orelse return;

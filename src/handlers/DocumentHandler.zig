@@ -19,7 +19,7 @@ pub const FileFormat = enum {
 };
 
 pdf_handler: PdfHandler,
-// The 0-based page to open at; the view keeps the position afterwards.
+// 0-based; the view keeps the position afterwards.
 initial_page: u16,
 file_format: FileFormat,
 

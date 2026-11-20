@@ -1,6 +1,3 @@
-//! Link hints, as zathura's f: each link in view gets a number. Typing it
-//! follows the link once no longer number could match; Enter follows what is
-//! typed, Backspace deletes a digit, and Escape or q cancel.
 const Self = @This();
 const std = @import("std");
 const vaxis = @import("vaxis");
@@ -10,7 +7,6 @@ const c = @import("../handlers/PdfHandler.zig").c;
 const View = @import("../View.zig");
 
 const Hint = struct {
-    // The link's top-left corner, in pixels from the view's top-left.
     x: f32,
     y: f32,
     uri: [:0]u8,
@@ -19,7 +15,6 @@ const Hint = struct {
     label_len: u8 = 0,
 };
 
-/// What choosing a link does: f follows it, F shows its target, c copies it.
 pub const Kind = enum { follow, display, copy };
 
 context: *Context,
@@ -50,8 +45,6 @@ pub fn deinit(self: *Self) void {
     self.hints.deinit(self.context.allocator);
 }
 
-// The links at least partly in view, ordered top to bottom, then left to
-// right.
 fn collect(self: *Self) !void {
     const allocator = self.context.allocator;
     const pdf = &self.context.document_handler.pdf_handler;
@@ -110,7 +103,6 @@ pub fn handleKeyStroke(self: *Self, key: vaxis.Key, _: Config.KeyMap) !void {
     }
 }
 
-// Opens external links with xdg-open; internal ones jump to their target.
 fn follow(self: *Self, i: usize) void {
     const ctx = self.context;
     const pdf = &ctx.document_handler.pdf_handler;
@@ -141,8 +133,6 @@ fn follow(self: *Self, i: usize) void {
     ctx.changeMode(.view);
 }
 
-/// Labels each link, over the page, at its top-left corner; labels that no
-/// longer match the typed digits are hidden.
 pub fn draw(self: *Self, win: vaxis.Window, view: *View) void {
     if (view.cell_w <= 0 or view.cell_h <= 0) return;
     const cell_w: f32 = @floatFromInt(view.cell_w);

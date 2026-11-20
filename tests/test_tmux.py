@@ -118,9 +118,7 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-tmux-test-") as directory:
         term.send("\x1b[32;2u", 0.35)
         assert pane("-e") == before, "tmux lost Shift+Space"
 
-        # Ghostty can emit several wheel reports for a single notch.
-        # Both the grouped and individually spaced reports must travel
-        # the same distance. The opposite notch should return to page 2.
+        # Grouped and spaced reports of one notch scroll alike; the opposite notch undoes it.
         down = "\x1b[<65;50;10M"
         up = "\x1b[<64;50;10M"
         term.send(down * 5, 0.2)

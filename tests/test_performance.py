@@ -94,8 +94,7 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-perf-") as directory:
         assert all(len(viewer.images[i][2]) == viewer.images[i][0] * viewer.images[i][1] * 3
                    for i in placed_ids(viewer)), "cleared highlights are still placed"
 
-        # Changing both the view and zoom before earlier jobs finish must
-        # settle to the same pixels as issuing only the final commands.
+        # Overlapping view and zoom changes must settle to the final command's pixels.
         viewer.send("4G+a2G", 0.35)
         resized = viewer.compose(None)
         viewer.send("s2Ga", 0.35)
@@ -114,8 +113,7 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-perf-") as directory:
 
     viewer = start(root / "bounded", 4)
     try:
-        # At this width each full strip is 768,000 bytes and the viewport
-        # needs three. The cache cannot hold the first and last page tops.
+        # 768,000-byte strips, three per viewport: both page tops can't stay cached.
         start_ids = set(viewer.images)
         assert len(start_ids - placed_ids(viewer)) >= 1, "no initial lookahead"
         viewer.send("4G", 0.5)

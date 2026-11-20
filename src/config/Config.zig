@@ -5,7 +5,6 @@ const vaxis = @import("vaxis");
 pub const max_sequence = 4;
 pub const max_alternatives = 4;
 
-/// Keys pressed one after another, such as `gg`.
 pub const Sequence = struct {
     keys: [max_sequence]vaxis.Key = [_]vaxis.Key{.{ .codepoint = 0 }} ** max_sequence,
     len: u8 = 0,
@@ -20,8 +19,7 @@ pub const Sequence = struct {
 
 pub const Match = enum { none, prefix, full };
 
-/// The key sequences that trigger one action. Keys match loosely, as vaxis
-/// does, so `J` matches Shift+j.
+/// Keys match loosely, as vaxis does, so `J` matches Shift+j.
 pub const Binding = struct {
     alternatives: [max_alternatives]Sequence = [_]Sequence{.{}} ** max_alternatives,
     len: u8 = 0,
@@ -48,7 +46,6 @@ pub const Binding = struct {
         self.len += 1;
     }
 
-    /// How the keys typed so far match this binding.
     pub fn match(self: Binding, typed: []const vaxis.Key) Match {
         var result: Match = .none;
         for (self.alternatives[0..self.len]) |seq| {
@@ -67,8 +64,7 @@ pub const Binding = struct {
         return result;
     }
 
-    // vaxis drops Shift when it makes no other character, so Space would
-    // match Shift+Space; named keys match exactly.
+    // Named keys match exactly, or Space would match Shift+Space.
     fn keyMatches(pressed: vaxis.Key, want: vaxis.Key) bool {
         const cp = want.codepoint;
         if (cp <= vaxis.Key.space or cp == vaxis.Key.backspace or cp >= 57344) {
@@ -77,7 +73,6 @@ pub const Binding = struct {
         return pressed.matches(cp, want.mods);
     }
 
-    /// Several notations as one binding.
     pub fn of(comptime texts: []const []const u8) Binding {
         @setEvalBranchQuota(10_000);
         var binding = Binding{};
@@ -85,7 +80,6 @@ pub const Binding = struct {
         return binding;
     }
 
-    /// True when a one-key alternative matches `pressed`.
     pub fn matchesKey(self: Binding, pressed: vaxis.Key) bool {
         return self.match(&[_]vaxis.Key{pressed}) == .full;
     }
@@ -117,7 +111,6 @@ pub const Binding = struct {
         return binding;
     }
 
-    // An uppercase ASCII letter means Shift plus the lowercase letter.
     fn plain(cp: u21, base: vaxis.Key.Modifiers) vaxis.Key {
         var mods = base;
         var code = cp;
@@ -153,7 +146,6 @@ pub const Binding = struct {
         .{ "del", vaxis.Key.delete },
     };
 
-    // The inside of <...>: modifier prefixes (C-, A-, M-, S-, D-) and a key.
     fn special(inner: []const u8) ?vaxis.Key {
         var rest = inner;
         var mods = vaxis.Key.Modifiers{};
@@ -180,14 +172,12 @@ pub const Binding = struct {
     }
 };
 
-/// A key sequence that runs a command, like zathura's `map T exec ...`.
 pub const Map = struct {
     binding: Binding,
     command: []const u8,
 };
 
-/// Each binding is a key object ({"key": "j", "modifiers": ["shift"]}), a
-/// zathura-style string ("gg", "<C-d>"), or a list of those; [] unbinds.
+/// Each binding is a key object, a zathura-style string or a list of those; [] unbinds.
 pub const KeyMap = struct {
     next: Binding = Binding.of(&.{ "J", "<PageDown>" }),
     prev: Binding = Binding.of(&.{ "K", "<PageUp>" }),
@@ -235,7 +225,6 @@ pub const KeyMap = struct {
     copy_link: Binding = Binding.key('c', .{}),
     reload: Binding = Binding.key('r', .{ .shift = true }),
     copy_path: Binding = Binding.key('y', .{ .shift = true }),
-    // Unbound by default; zathura has no such key.
     trim_margins: Binding = .{},
     colorize: Binding = Binding.key('r', .{ .ctrl = true }),
     quit: Binding = Binding.key('q', .{}),
@@ -319,7 +308,6 @@ pub const General = struct {
     dpi: f32 = 96.0,
     // whole number (possibly 0)
     history: u32 = 1000,
-    // terminal gui
     progress_bar: bool = false,
     // two-page mode: the column (1 or 2) holding page 1, like zathura
     first_page_column: u8 = 2,
@@ -327,17 +315,13 @@ pub const General = struct {
     recolor_keephue: bool = false,
     // ...and leaves pictures alone (zathura's recolor-reverse-video).
     recolor_reverse_video: bool = false,
-    // Reopen each document at the page it was closed on.
     remember_page: bool = true,
-    // Crop each page to what is printed on it, plus trim_padding points.
     trim_margins: bool = false,
     trim_padding: f32 = 10,
-    // Search as the pattern is typed, as zathura's incremental-search.
     incremental_search: bool = false,
     // Pixels per mouse wheel event; terminals send several per notch.
     wheel_step: f32 = 24,
     smooth_scroll: bool = false,
-    // Pixels between pages when scrolling through them.
     page_gap: f32 = 8,
 
     pub fn parse(val: std.json.Value, allocator: std.mem.Allocator) General {
@@ -459,8 +443,7 @@ pub const Cache = struct {
     enabled: bool = true,
     // Unused: pages are cached in strips, bounded by memory_mb.
     lru_size: u16 = 10,
-    // Megabytes of rendered strips kept in the terminal for scrolling back;
-    // Ghostty holds up to 320 MB of images.
+    // Megabytes of strips kept in the terminal; Ghostty holds up to 320 MB of images.
     memory_mb: u32 = 192,
 
     pub fn parse(val: std.json.Value, allocator: std.mem.Allocator) Cache {

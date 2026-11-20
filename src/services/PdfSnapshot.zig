@@ -23,9 +23,7 @@ allocator: std.mem.Allocator,
 refs: std.atomic.Value(u32) = .init(1),
 linked: std.atomic.Value(bool) = .init(true),
 
-/// Keep an immutable PDF for both MuPDF contexts, including when the source
-/// is truncated in place. Copy directly between files to avoid a PDF-sized
-/// allocation in the viewer.
+/// A private copy for both MuPDF contexts, even if the source is truncated in place.
 pub fn capture(allocator: std.mem.Allocator, source: []const u8, stopping: ?*const std.atomic.Value(bool)) !*Self {
     const stamp = Stamp.read(source) orelse return error.InvalidPdfFile;
     if (stamp.size == 0) return error.EmptyPdf;
@@ -64,8 +62,7 @@ pub fn retain(self: *Self) void {
     _ = self.refs.fetchAdd(1, .monotonic);
 }
 
-/// Once both MuPDF documents are open, their file handles keep the bytes
-/// alive. Removing the directory entry also cleans up after an abrupt exit.
+/// The open documents keep the bytes; unlinking also cleans up after a crash.
 pub fn unlink(self: *Self) void {
     if (!self.linked.swap(false, .acq_rel)) return;
     std.fs.cwd().deleteFile(self.path) catch self.linked.store(true, .release);

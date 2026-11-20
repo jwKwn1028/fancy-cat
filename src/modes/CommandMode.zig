@@ -6,8 +6,6 @@ const Config = @import("../config/Config.zig");
 const Commands = @import("../Commands.zig");
 const TextInput = vaxis.widgets.TextInput;
 
-/// What the typed line is for: a command after ':' or a search after '/' or
-/// '?'.
 pub const Kind = enum { command, search_forward, search_backward };
 
 context: *Context,
@@ -134,7 +132,6 @@ pub fn searchDelay(self: *Self) ?u64 {
     return 30 * std.time.ns_per_ms -| timer.read();
 }
 
-/// Incremental search for the typed text.
 pub fn runSearch(self: *Self) void {
     self.search_timer = null;
     const buf = self.text_input.buf;
