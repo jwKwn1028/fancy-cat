@@ -162,10 +162,10 @@ pub fn deinit(self: *Self, w: *Writer) void {
     var it = self.tiles.valueIterator();
     while (it.next()) |tile| self.disposeImage(w, tile.id) catch {};
     for (self.doomed.items) |id| self.disposeImage(w, id) catch {};
+    for (self.overlay_images) |image| if (image) |id| self.disposeImage(w, id) catch {};
     var files = self.files.valueIterator();
     while (files.next()) |file| file.image.deinit(self.allocator);
     self.files.deinit();
-    for (self.overlay_images) |image| if (image) |id| self.disposeImage(w, id) catch {};
     var batch: Graphics.TmuxBatch = .{ .writer = w };
     self.deleteRetired(&batch) catch {};
     batch.finish() catch {};
