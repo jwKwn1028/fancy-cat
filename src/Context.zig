@@ -15,6 +15,8 @@ const History = @import("services/History.zig");
 const Positions = @import("services/Positions.zig");
 const Spawn = @import("utilities/Spawn.zig");
 
+const Preview = @import("services/Preview.zig");
+
 pub const panic = vaxis.panic_handler;
 
 pub const Event = union(enum) {
@@ -37,6 +39,8 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     should_quit: bool,
+    inverse_program: ?[]const u8 = null,
+    socket_path: ?[]const u8 = null,
     tty: vaxis.Tty,
     vx: vaxis.Vaxis,
     document_handler: DocumentHandler,
@@ -69,13 +73,7 @@ pub const Context = struct {
         remaining: u32 = 1,
     };
 
-    pub fn init(allocator: std.mem.Allocator, args: [][:0]u8) !Self {
-        const path = args[1];
-        const initial_page = if (args.len == 3)
-            try std.fmt.parseInt(u16, args[2], 10)
-        else
-            null;
-
+    pub fn init(allocator: std.mem.Allocator, path: []const u8, initial_page: ?u16) !Self {
         const config = try allocator.create(Config);
         errdefer allocator.destroy(config);
         config.* = Config.init(allocator);
@@ -236,6 +234,12 @@ pub const Context = struct {
             stopReloader(&reloader, &loop);
         }
 
+        const remote = if (self.socket_path) |path| try Preview.listen(path) else null;
+        defer if (remote) |fd| {
+            std.posix.close(fd);
+            std.fs.cwd().deleteFile(self.socket_path.?) catch {};
+        };
+
         var frame_clock = try std.time.Timer.start();
         var wheel: i64 = 0;
         var wheel_clock: ?std.time.Timer = null;
@@ -253,6 +257,9 @@ pub const Context = struct {
             } else if (self.search_task == null and loop.queue.isEmpty() and !worker.waitForWork()) {
                 if (idle_delay) |delay| {
                     if (delay > 0) std.Thread.sleep(@min(delay, 3 * std.time.ns_per_ms));
+                } else if (remote) |fd| {
+                    var fds = [_]std.posix.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
+                    _ = try std.posix.poll(&fds, 20);
                 } else {
                     loop.pollEvent();
                 }
@@ -275,6 +282,9 @@ pub const Context = struct {
             if (self.should_quit) break;
 
             try self.applyReload();
+            if (remote) |fd| self.receiveRemote(fd) catch |err| {
+                self.showMessage("Preview command failed: {s}", .{@errorName(err)});
+            };
             if (self.indicatorDelay() == 0) try self.endReloadIndicator();
             frame_clock.reset();
             self.advanceScroll();
@@ -288,6 +298,38 @@ pub const Context = struct {
             }
             if (self.search_task != null) search_changed = self.advanceSearch(&loop) or search_changed;
             if (search_changed) try self.frame(&worker);
+        }
+    }
+
+    fn receiveRemote(self: *Self, fd: std.posix.socket_t) !void {
+        var buf: [Preview.limit + 1]u8 = undefined;
+        const n = std.posix.recv(fd, &buf, 0) catch |err| switch (err) {
+            error.WouldBlock => return,
+            else => return err,
+        };
+        if (n > Preview.limit) return error.CommandTooLong;
+        const command = try Preview.Command.parse(buf[0..n]);
+        const pdf = &self.document_handler.pdf_handler;
+        const point = switch (command) {
+            .page => null,
+            .forward => |f| try Preview.forward(self.allocator, self.absolute_path orelse pdf.path, f.source, f.line, f.column),
+        };
+        const page = if (point) |p| p.page else command.page.number;
+        if (page == 0 or page > pdf.total_pages) return error.PageOutOfRange;
+        self.changeMode(.view);
+        self.clearMessage();
+        self.clearSearch();
+        self.search_origin = null;
+        self.preview_current = false;
+        self.scroll_animation = null;
+        self.view.recordJump();
+        self.view.goToPage(page - 1);
+        if (point) |p| {
+            if (pdf.layoutPoint(page - 1, p.x, p.y)) |q| self.view.showRect(page - 1, .{ .x0 = q.x, .x1 = q.x, .y0 = q.y, .y1 = q.y });
+        } else if (command.page.text) |needle| {
+            if (needle.len == 0) return;
+            try pdf.setSearch(needle, false);
+            if (pdf.hitsOn(page - 1).len > 0) self.showHit(.{ .page = page - 1, .index = 0 }, false);
         }
     }
 

@@ -480,10 +480,6 @@ pub fn handleMouse(self: *Self, mouse: vaxis.Mouse) !void {
 }
 
 fn handleLeftMouse(self: *Self, mouse: vaxis.Mouse) !void {
-    if (mouse.mods.ctrl) {
-        self.cancelMouseGesture();
-        return;
-    }
     const s = self.context;
     const view = &s.view;
     const pdf = &s.document_handler.pdf_handler;
@@ -497,6 +493,16 @@ fn handleLeftMouse(self: *Self, mouse: vaxis.Mouse) !void {
         if (pixel) mouse.xoffset else @intCast(@divFloor(view.cell_w, 2)),
         if (pixel) mouse.yoffset else @intCast(@divFloor(view.cell_h, 2)),
     );
+    if (mouse.mods.ctrl) {
+        self.cancelMouseGesture();
+        if (mouse.type != .press) return;
+        const program = s.inverse_program orelse return;
+        const page = view.pageAt(position) orelse return;
+        @import("../services/Preview.zig").inverse(s.allocator, program, s.absolute_path orelse pdf.path, page.page + 1, page.point.x, page.point.y) catch |err| {
+            s.showMessage("Inverse search failed: {s}", .{@errorName(err)});
+        };
+        return;
+    }
     switch (mouse.type) {
         .press => {
             self.gesture = null;

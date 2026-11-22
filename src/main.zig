@@ -53,8 +53,25 @@ pub fn main() !void {
         return;
     }
 
-    if (args.len < 2 or args.len > 3 or (std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h"))) {
-        try stderr.writeAll("Usage: fancy-cat <path-to-pdf> <optional-page-number>\n");
+    const preview = @import("services/Preview.zig");
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "--remote")) {
+        if (args.len < 5) return error.MissingRemoteArguments;
+        return preview.send(std.heap.page_allocator, args[2], args[3..]);
+    }
+
+    var first: usize = 1;
+    var socket_path: ?[]const u8 = null;
+    var inverse: ?[]const u8 = null;
+    while (first + 1 < args.len) : (first += 2) {
+        if (std.mem.eql(u8, args[first], "--listen")) {
+            socket_path = args[first + 1];
+        } else if (std.mem.eql(u8, args[first], "--inverse-search")) {
+            inverse = args[first + 1];
+        } else break;
+    }
+    const positional = args[first..];
+    if (positional.len == 0 or positional.len > 2 or (std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h"))) {
+        try stderr.writeAll("Usage: fancy-cat [--listen SOCKET] [--inverse-search PROGRAM] PDF [PAGE]\n       fancy-cat --remote SOCKET goto-page PAGE [TEXT]\n       fancy-cat --remote SOCKET forward-search ABSOLUTE_SOURCE LINE [COLUMN]\n");
         try stderr.flush();
         return;
     }
@@ -68,8 +85,11 @@ pub fn main() !void {
     }
     const allocator = gpa.allocator();
 
-    var app = try Context.init(allocator, args);
+    const initial_page = if (positional.len == 2) try std.fmt.parseInt(u16, positional[1], 10) else null;
+    var app = try Context.init(allocator, positional[0], initial_page);
     defer app.deinit();
 
+    app.inverse_program = inverse;
+    app.socket_path = socket_path;
     try app.run();
 }
