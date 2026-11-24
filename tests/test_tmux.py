@@ -18,7 +18,7 @@ from harness import COLS, ROWS, XPIX, YPIX, Viewer  # noqa: E402
 
 BINARY = str(Path(sys.argv[1]).resolve())
 TMUX = shutil.which("tmux")
-PDF = str(Path(__file__).resolve().parent / "fixtures/test.pdf")
+FIXTURE = Path(__file__).resolve().parent / "fixtures/test.pdf"
 UPLOAD = b"_Ga=T,t=f,U=1"
 PLACEHOLDER = "\U0010eeee"
 
@@ -62,38 +62,63 @@ class Terminal(Viewer):
 
 with tempfile.TemporaryDirectory(prefix="fancy-cat-tmux-test-") as directory:
     root = Path(directory)
+    PDF = str(root / "live.pdf")
+    shutil.copyfile(FIXTURE, PDF)
+    preview_socket = str(root / "preview.sock")
     config = root / "config/fancy-cat/config.json"
     config.parent.mkdir(parents=True)
     config.write_text(json.dumps({
         "General": {"remember_page": False, "smooth_scroll": False, "scroll_step": 40, "wheel_step": 12},
         "StatusBar": {"enabled": True, "items": ["P<page>/<total_pages>"]},
-        "FileMonitor": {"enabled": False},
+        "FileMonitor": {"enabled": True, "latency": 0.03},
     }))
+    callback = root / "inverse-callback"
+    inverse_log = root / "inverse.log"
+    callback.write_text('#!/bin/sh\nprintf "%s" "$1" > "$INVERSE_LOG"\n')
+    callback.chmod(0o700)
+    resolver = root / "inverse-resolver"
+    resolver.write_text('#!/bin/sh\nprintf "%s" "$1:3:1"\n')
+    resolver.chmod(0o700)
     tmux_cfg = root / "tmux.conf"
     tmux_cfg.write_text(
         "set -g allow-passthrough on\nset -g focus-events on\nset -g status off\n"
         "set -g mouse on\nset -sg escape-time 10\nset -s extended-keys on\nset -s extended-keys-format csi-u\n"
+        "bind -n C-MouseDown1Pane if -F -t = '#{mouse_any_flag}' { send-keys -M } { swap-pane -s @ }\n"
         "set -s terminal-features[90] xterm-256color:RGB:extkeys:sync\n"
     )
     socket = root / "tmux.sock"
     env = {"HOME": directory, "TMPDIR": directory, "XDG_CONFIG_HOME": directory + "/config",
            "XDG_STATE_HOME": directory + "/state", "PATH": os.environ["PATH"],
-           "TERM": "xterm-256color", "LANG": "C.UTF-8", "SHELL": "/bin/sh"}
+           "TERM": "xterm-256color", "LANG": "C.UTF-8", "SHELL": "/bin/sh",
+           "INVERSE_LOG": str(inverse_log)}
     command = [TMUX, "-S", str(socket)]
 
     def tmux(*args, check=True):
         return subprocess.run(command + list(args), env=env, capture_output=True, check=check, text=True).stdout
 
+    viewer_pane = "viewer:0.0"
+
     def pane(*args):
-        return tmux("capture-pane", "-p", *args, "-t", "viewer:0.0")
+        return tmux("capture-pane", "-p", *args, "-t", viewer_pane)
 
     term = Terminal(TMUX, command[1:] + ["-f", str(tmux_cfg), "new-session", "-s", "viewer",
-                                         "sleep 0.25; exec " + shlex.join([BINARY, PDF, "2"])], env)
+                                         "sleep 0.25; exec " + shlex.join([BINARY, "--listen", preview_socket,
+                                               "--inverse-search", str(callback),
+                                               "--inverse-search-resolver", str(resolver), PDF, "2"])], env)
     try:
         term.pump(1.8)
+        viewer_pane = tmux("display-message", "-p", "-t", viewer_pane, "#{pane_id}").strip()
         assert PLACEHOLDER in pane() and "P2/5" in pane(), pane()
         assert UPLOAD in term.raw and PLACEHOLDER.encode() in term.raw
         assert b"\x1b[?2026h" in term.raw, "tmux did not synchronize redraws to the terminal"
+
+        term.send("\x0c", 0.3)
+        assert inverse_log.read_text() == PDF+":3:1", "Ctrl+L did not reach fancy-cat in tmux"
+        inverse_log.unlink()
+        term.send("\x1b[<16;50;10M", 0.2)
+        assert not inverse_log.exists(), "tmux Ctrl+press triggered inverse lookup"
+        term.send("\x1b[<16;50;10m", 0.3)
+        assert inverse_log.read_text() == PDF+":3:1", "tmux swallowed Ctrl+click"
 
         term.send("J", 0.38)
         assert "P3/5" in pane(), pane()
@@ -130,6 +155,19 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-tmux-test-") as directory:
             term.send(down, 0.03)
         assert pane("-e") == after_wheel, "grouping the wheel changed the distance"
 
+        # hxp runs the viewer in the right half of a shared tmux window.
+        tmux("split-window", "-hb", "-t", viewer_pane, "sleep 30")
+        tmux("select-pane", "-t", viewer_pane)
+        term.pump(0.4)
+        subprocess.run([BINARY, "--remote", preview_socket, "goto-page", "4", ""], env=env, check=True)
+        term.pump(0.4)
+        assert "P4/5" in pane() and PLACEHOLDER in pane(), "remote jump failed in an hxp-style split"
+        staged = root / "replacement.pdf"
+        shutil.copyfile(FIXTURE, staged)
+        os.replace(staged, PDF)
+        term.pump(0.5)
+        assert "P4/5" in pane() and PLACEHOLDER in pane(), "atomic reload lost the tmux split preview"
+
         tmux("new-window", "-t", "viewer:1", "printf 'other window\\n'; sleep 10")
         term.pump(0.3)
         assert PLACEHOLDER not in tmux("capture-pane", "-p", "-t", "viewer:1.0")
@@ -152,4 +190,4 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-tmux-test-") as directory:
         tmux("kill-server", check=False)
         os.close(term.fd)
 
-print("PASS: real tmux passthrough, page turns, mouse wheel, search, extended keys, focus and reattach")
+print("PASS: real tmux graphics, input, hxp-style split and remote jump, reload, focus and reattach")

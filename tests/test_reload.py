@@ -16,7 +16,7 @@ CLIPBOARD = b"\x1b]52;c;"
 ERROR = "Could not reload PDF"
 
 
-def pdf_bytes(pages, rgb):
+def pdf_bytes(pages, rgb, width=400):
     # Solid page colors make it clear which document supplied the pixels.
     children = " ".join(f"{3 + 2 * page} 0 R" for page in range(pages))
     objects = [
@@ -24,9 +24,9 @@ def pdf_bytes(pages, rgb):
         f"<< /Type /Pages /Count {pages} /Kids [{children}] >>".encode(),
     ]
     for page in range(pages):
-        stream = f"{rgb} rg 0 0 400 600 re f\n".encode()
+        stream = f"{rgb} rg 0 0 {width} 600 re f\n".encode()
         objects.extend([
-            (f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 600] "
+            (f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} 600] "
              f"/Resources << >> /Contents {4 + 2 * page} 0 R >>").encode(),
             f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"endstream",
         ])
@@ -48,7 +48,8 @@ def start(root, watch):
     config.write_text(json.dumps({
         "StatusBar": {"enabled": True, "items": ["P<page>/<total_pages> <path>"]},
         "FileMonitor": {"enabled": watch, "latency": 0.03},
-        "General": {"remember_page": False, "timeout": 0.75, "retry_delay": 0.04},
+        "General": {"remember_page": False, "timeout": 0.75, "retry_delay": 0.04,
+                    "detect_dpi": False},
         "Cache": {"enabled": False},
     }))
     source = root / "live.pdf"
@@ -117,6 +118,24 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-test-reload-") as directory:
         viewer.pump(0.6)
         expect_page(viewer, "P1/3")
         assert pixels(viewer) == b"\0\xff\0"
+
+        # A page-size edit must keep the active fit mode; manual zoom stays fixed.
+        source.write_bytes(pdf_bytes(3, "0 1 0", width=800))
+        viewer.pump(0.6)
+        assert max(width for width, _, _ in viewer.images.values()) == XPIX, "reload used the old fitted scale"
+        reloaded = viewer.compose(None)
+        viewer.send("s", 0.25)
+        assert viewer.compose(None) == reloaded, "reload lost fit-width after a page-size change"
+        viewer.send("a", 0.25)
+        source.write_bytes(pdf_bytes(3, "0 1 0"))
+        viewer.pump(0.6)
+        reloaded = viewer.compose(None)
+        viewer.send("a", 0.25)
+        assert viewer.compose(None) == reloaded, "reload lost fit-page after a page-size change"
+        viewer.send(":180%\r", 0.25)
+        source.write_bytes(pdf_bytes(3, "0 1 0", width=800))
+        viewer.pump(0.6)
+        assert max(width for width, _, _ in viewer.images.values()) == 1920, "reload changed manual zoom"
     finally:
         finish(viewer, root)
 

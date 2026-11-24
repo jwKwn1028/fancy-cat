@@ -11,6 +11,7 @@ const View = @import("View.zig");
 const Tmux = @import("Tmux.zig");
 const RenderWorker = @import("RenderWorker.zig");
 const ReloadWorker = @import("services/ReloadWorker.zig");
+const Snapshot = @import("services/PdfSnapshot.zig");
 const History = @import("services/History.zig");
 const Positions = @import("services/Positions.zig");
 const Spawn = @import("utilities/Spawn.zig");
@@ -40,7 +41,12 @@ pub const Context = struct {
     arena: std.heap.ArenaAllocator,
     should_quit: bool,
     inverse_program: ?[]const u8 = null,
+    inverse_resolver: ?[]const u8 = null,
+    pointer: ?vaxis.Mouse = null,
     socket_path: ?[]const u8 = null,
+    remote_buf: [Preview.limit]u8 = undefined,
+    remote_len: usize = 0,
+    remote_waiting: bool = false,
     tty: vaxis.Tty,
     vx: vaxis.Vaxis,
     document_handler: DocumentHandler,
@@ -266,6 +272,7 @@ pub const Context = struct {
             }
 
             while (loop.tryEvent()) |event| {
+                if (event == .mouse) self.pointer = event.mouse;
                 if (self.should_quit or event == .reload_ready or (event == .mouse and event.mouse.type == .motion)) continue;
                 if (self.wheelDirection(event)) |direction| {
                     if (wheel != 0 and (wheel > 0) != (direction > 0)) self.flushWheel(&wheel);
@@ -303,13 +310,33 @@ pub const Context = struct {
 
     fn receiveRemote(self: *Self, fd: std.posix.socket_t) !void {
         var buf: [Preview.limit + 1]u8 = undefined;
-        const n = std.posix.recv(fd, &buf, 0) catch |err| switch (err) {
-            error.WouldBlock => return,
-            else => return err,
-        };
-        if (n > Preview.limit) return error.CommandTooLong;
-        const command = try Preview.Command.parse(buf[0..n]);
+        // Cursor jumps can arrive in bursts; resolve only the latest destination.
+        // Bound the drain so a busy sender still leaves time for terminal input.
+        for (0..32) |_| {
+            const n = std.posix.recv(fd, &buf, 0) catch |err| switch (err) {
+                error.WouldBlock => break,
+                else => return err,
+            };
+            if (n > Preview.limit) return error.CommandTooLong;
+            _ = try Preview.Command.parse(buf[0..n]);
+            @memcpy(self.remote_buf[0..n], buf[0..n]);
+            self.remote_len = n;
+            self.remote_waiting = false;
+        }
+        if (self.remote_len == 0 or self.remote_waiting) return;
         const pdf = &self.document_handler.pdf_handler;
+        if (self.config.file_monitor.enabled and
+            !std.meta.eql(Snapshot.Stamp.read(pdf.path), @as(?Snapshot.Stamp, pdf.snapshot.stamp)))
+        {
+            // hxp may request a position before the new PDF has loaded. Release
+            // any outline/link objects and keep the command until reload finishes.
+            self.changeMode(.view);
+            self.remote_waiting = true;
+            self.reload();
+            return;
+        }
+        const command = try Preview.Command.parse(self.remote_buf[0..self.remote_len]);
+        self.remote_len = 0;
         const point = switch (command) {
             .page => null,
             .forward => |f| try Preview.forward(self.allocator, self.absolute_path orelse pdf.path, f.source, f.line, f.column),
@@ -495,6 +522,7 @@ pub const Context = struct {
                 }
             },
             .winsize => |ws| {
+                self.pointer = null;
                 if (self.view.transport == .tmux) self.tmux_cell = Tmux.cellSize(self.allocator) orelse self.tmux_cell;
                 self.ui_dirty = true;
                 if (self.current_mode == .view) self.current_mode.view.cancelMouseGesture();
@@ -698,6 +726,8 @@ pub const Context = struct {
         if (self.current_mode == .index or self.current_mode == .hints) return;
         const result = self.reloader.?.take() orelse return;
         if (result == .failed) {
+            self.remote_len = 0;
+            self.remote_waiting = false;
             self.showMessage(reload_message, .{});
             return;
         }
@@ -714,6 +744,7 @@ pub const Context = struct {
         previous.deinit();
 
         self.view.reloaded();
+        self.remote_waiting = false;
         self.search_task = null;
         self.preview_current = false;
         self.repeats.clearRetainingCapacity();

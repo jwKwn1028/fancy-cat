@@ -224,6 +224,7 @@ pub const KeyMap = struct {
     display_link: Binding = Binding.key('f', .{ .shift = true }),
     copy_link: Binding = Binding.key('c', .{}),
     reload: Binding = Binding.key('r', .{ .shift = true }),
+    inverse_search: Binding = Binding.key('l', .{ .ctrl = true }),
     copy_path: Binding = Binding.key('y', .{ .shift = true }),
     trim_margins: Binding = .{},
     colorize: Binding = Binding.key('r', .{ .ctrl = true }),

@@ -98,6 +98,7 @@ The rest of this reference provides detailed explanations for each configuration
 ## Contents
 
 - [Mouse](#mouse)
+- [Live Preview](#live-preview)
 - [Key Map](#key-map)
   - [Keybindings](#keybindings)
     - [Keys](#keys)
@@ -126,7 +127,41 @@ to select and copy it. The selection stays visible until another left press,
 Escape, or a document reload. The terminal must allow OSC 52 clipboard writes.
 
 A left drag from blank space pans the view. Shift+wheel pans horizontally and
-Ctrl+wheel zooms. Ctrl+click is reserved for SyncTeX.
+Ctrl+wheel zooms. Ctrl+click runs inverse search on release. Ctrl+L runs the
+`inverse_search` action at the last pointer position over a page, or at the view
+centre. If the centre is in a spread's gutter, it uses the nearest point on the
+current page. Remap it with `KeyMap.inverse_search` (default `<C-l>`).
+
+`--inverse-search PROGRAM` receives a `FILE:LINE:COL` argument. By default the
+position comes from SyncTeX. With `--inverse-search-resolver PROGRAM`, the resolver
+receives `PDF PAGE X Y TEXT` (1-based page, PDF coordinates and the nearest rendered
+line), and prints a single `FILE:LINE:COL` location. This supports hxp's Typst prose
+lookup. Exit codes 3, 4, 5 and 6 report no matching text, ambiguous text, a missing
+live session and no SyncTeX location; any other failure shows
+`InverseSourceLookupFailed`. No editor callback runs after a failed lookup.
+
+In tmux, allow Ctrl+click through to mouse-aware applications:
+
+```tmux
+bind -n C-MouseDown1Pane if -F -t = '#{mouse_any_flag}' { send-keys -M } { swap-pane -s @ }
+```
+
+## Live Preview
+
+`--listen SOCKET` accepts navigation from hxp or another local editor:
+
+```sh
+fancy-cat --remote SOCKET goto-page PAGE [TEXT]
+fancy-cat --remote SOCKET forward-search ABSOLUTE_SOURCE LINE [COLUMN]
+```
+
+Queued requests use the latest destination. With `FileMonitor.enabled`, a request
+received while the PDF is changing waits for the background reload. A failed
+reload discards the pending request after `General.timeout` and keeps the last
+good document visible. Page-size changes preserve fit-width or fit-page mode;
+manual zoom stays at the chosen scale.
+Text focus also centres the target correctly when the last page is shorter than
+the preview pane, as with slides in a narrow tmux split.
 
 ## Key Map
 

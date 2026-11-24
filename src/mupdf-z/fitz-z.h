@@ -14,6 +14,7 @@ fz_link *fz_load_links_z(fz_context *ctx, fz_page *page);
 void *fz_load_text_z(fz_context *ctx, fz_page *page, int search);
 void fz_drop_text_z(fz_context *ctx, void *text);
 int fz_text_at_z(void *text, fz_point point, fz_quad *quad);
+char *fz_copy_line_at_z(fz_context *ctx, void *text, fz_point point);
 int fz_highlight_selection_z(fz_context *ctx, void *text, fz_point a, fz_point b, fz_quad *quads, int max);
 void fz_snap_word_z(fz_context *ctx, void *text, fz_point *a, fz_point *b);
 char *fz_copy_selection_z(fz_context *ctx, void *text, fz_point a, fz_point b);

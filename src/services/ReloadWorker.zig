@@ -108,8 +108,11 @@ fn run(self: *Self) void {
         if (now >= next_check) {
             const stamp = Snapshot.Stamp.read(self.path);
             if (!std.meta.eql(seen, stamp)) {
+                // A new inode is an atomic replacement, already complete: load it
+                // now. An in-place write may still be running, so let it settle.
+                const replaced = if (seen) |old| if (stamp) |new| old.inode != new.inode else false else false;
                 seen = stamp;
-                const due = now + interval;
+                const due = if (replaced) now else now + interval;
                 const expires = if (pending) |old| old.expires else due + self.timeout;
                 pending = .{ .due = due, .expires = expires };
             }

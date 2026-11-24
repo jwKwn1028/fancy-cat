@@ -314,6 +314,7 @@ pub fn reloaded(self: *Self) void {
     self.layouts.clearRetainingCapacity();
     self.clearTiles();
     self.unit = self.pdf.unitOf(@min(self.unit, self.pdf.total_pages - 1));
+    if (self.fitted and self.ready()) self.rescale(self.fitZoom(), false);
     self.normalize();
 }
 
@@ -517,8 +518,8 @@ pub fn goToPoint(self: *Self, page: u16, y: f32) void {
 }
 
 pub fn showRect(self: *Self, page: u16, rect: c.fz_rect) void {
-    self.unit = self.pdf.unitOf(page);
     self.normalize();
+    self.unit = self.pdf.unitOf(page);
     if (self.zoom <= 0) return;
     self.y = (rect.y0 + rect.y1) / 2 * self.zoom - @as(f32, @floatFromInt(self.height)) / 2;
     self.x = (rect.x0 + rect.x1) / 2 * self.zoom - @as(f32, @floatFromInt(self.width)) / 2;

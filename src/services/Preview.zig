@@ -79,7 +79,37 @@ pub fn forward(a: std.mem.Allocator, pdf: []const u8, source: []const u8, line: 
     };
 }
 
-pub fn inverse(a: std.mem.Allocator, program: []const u8, pdf: []const u8, page: u16, x: f32, y: f32) !void {
+pub fn inverse(a: std.mem.Allocator, program: []const u8, resolver: ?[]const u8, pdf: []const u8, page: u16, x: f32, y: f32, text: []const u8) !void {
+    if (resolver) |helper| {
+        const number = try std.fmt.allocPrint(a, "{d}", .{page});
+        defer a.free(number);
+        const px = try std.fmt.allocPrint(a, "{d:.3}", .{x});
+        defer a.free(px);
+        const py = try std.fmt.allocPrint(a, "{d:.3}", .{y});
+        defer a.free(py);
+        const result = try std.process.Child.run(.{ .allocator = a, .argv = &.{ helper, pdf, number, px, py, text } });
+        defer a.free(result.stdout);
+        defer a.free(result.stderr);
+        if (result.term != .Exited) return error.InverseSourceLookupFailed;
+        switch (result.term.Exited) {
+            0 => {},
+            3 => return error.NoMatchingSourceText,
+            4 => return error.AmbiguousSourceText,
+            5 => return error.NoLiveSourceSession,
+            6 => return error.NoSyncTeXSourceLocation,
+            else => return error.InverseSourceLookupFailed,
+        }
+        const location = std.mem.trim(u8, result.stdout, " \t\r\n");
+        if (location.len == 0 or std.mem.indexOfAny(u8, location, "\r\n") != null) return error.InvalidSourceLocation;
+        const column_at = std.mem.lastIndexOfScalar(u8, location, ':') orelse return error.InvalidSourceLocation;
+        const line_at = std.mem.lastIndexOfScalar(u8, location[0..column_at], ':') orelse return error.InvalidSourceLocation;
+        if (line_at == 0) return error.InvalidSourceLocation;
+        const line_number = std.fmt.parseInt(u32, location[line_at + 1 .. column_at], 10) catch return error.InvalidSourceLocation;
+        const column_number = std.fmt.parseInt(u32, location[column_at + 1 ..], 10) catch return error.InvalidSourceLocation;
+        if (line_number == 0 or column_number == 0) return error.InvalidSourceLocation;
+        try Spawn.detached(a, &.{ program, location }, pdf, page);
+        return;
+    }
     const pos = try std.fmt.allocPrint(a, "{d}:{d:.3}:{d:.3}:{s}", .{ page, x, y, pdf });
     defer a.free(pos);
     const out = try lookup(a, &.{ "synctex", "edit", "-o", pos });

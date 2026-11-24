@@ -129,6 +129,39 @@ char *fz_copy_selection_z(fz_context *ctx, void *text, fz_point a, fz_point b) {
   return copy;
 }
 
+char *fz_copy_line_at_z(fz_context *ctx, void *page_text, fz_point point) {
+  fz_stext_page *text = page_text;
+  fz_stext_line *nearest = NULL;
+  float distance = 1e30f;
+  for (fz_stext_block *block = text->first_block; block; block = block->next) {
+    if (block->type != FZ_STEXT_BLOCK_TEXT) continue;
+    for (fz_stext_line *line = block->u.t.first_line; line; line = line->next) {
+      if (!line->first_char) continue;
+      fz_rect box = line->bbox;
+      float dx = point.x < box.x0 ? box.x0 - point.x : point.x > box.x1 ? point.x - box.x1 : 0;
+      float dy = point.y < box.y0 ? box.y0 - point.y : point.y > box.y1 ? point.y - box.y1 : 0;
+      if (dx * dx + dy * dy < distance) {
+        nearest = line;
+        distance = dx * dx + dy * dy;
+      }
+    }
+  }
+  if (!nearest) return NULL;
+  char *copy = NULL;
+  fz_buffer *buf = NULL;
+  fz_var(copy);
+  fz_var(buf);
+  fz_try(ctx) {
+    buf = fz_new_buffer(ctx, 128);
+    for (fz_stext_char *ch = nearest->first_char; ch; ch = ch->next)
+      fz_append_rune(ctx, buf, ch->c);
+    copy = fz_strdup(ctx, fz_string_from_buffer(ctx, buf));
+  }
+  fz_always(ctx) { fz_drop_buffer(ctx, buf); }
+  fz_catch(ctx) { copy = NULL; }
+  return copy;
+}
+
 int fz_text_at_z(void *page_text, fz_point point, fz_quad *quad) {
   fz_stext_page *text = page_text;
   for (fz_stext_block *block = text->first_block; block; block = block->next) {

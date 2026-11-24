@@ -293,6 +293,12 @@ pub fn textAt(self: *Self, number: u16, point: c.fz_point) ?c.fz_quad {
     return if (c.fz_text_at_z(text, point, &quad) != 0) quad else null;
 }
 
+/// Nearest rendered line, released by the caller with fz_free.
+pub fn lineAt(self: *Self, number: u16, point: c.fz_point) ?[*:0]u8 {
+    const text = self.textOn(number, false) orelse return null;
+    return c.fz_copy_line_at_z(self.ctx, text, point);
+}
+
 pub fn clearSelection(self: *Self) void {
     if (self.selection_page != null) self.selection_revision +%= 1;
     self.selection_page = null;

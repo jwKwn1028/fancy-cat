@@ -12,7 +12,7 @@
 > [!NOTE]
 > This is a modified version of [fancy-cat](https://github.com/freref/fancy-cat)
 > by [freref](https://github.com/freref) and its contributors, based on
-> release 0.6.0 and last modified on 2026-11-20. It adds Zathura-like keys,
+> release 0.6.0 and last modified on 2026-11-24. It adds Zathura-like keys,
 > marks, link hints and maps, background reloads that keep the last good
 > version, a strip cache for continuous scrolling, and rendering inside tmux
 > under Ghostty. Like the original, it is licensed under the
@@ -93,11 +93,14 @@ zig build run -- <path-to-pdf> <optional-page-number>
 
 ### Tests
 
-The tests need [Typst](https://typst.app) to build their PDF, and `test_tmux.py` needs tmux:
+The tests need [Typst](https://typst.app) to build their PDF. The preview test
+also needs `pdflatex` and `synctex`, and the tmux test needs tmux:
 
 ```sh
 typst compile tests/fixtures/test.typ
-python3 -I tests/test_keys.py zig-out/bin/fancy-cat
+for suite in tests/test_*.py; do
+  python3 -I "$suite" zig-out/bin/fancy-cat || break
+done
 ```
 
 ## Features

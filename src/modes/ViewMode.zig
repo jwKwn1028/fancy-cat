@@ -17,6 +17,7 @@ mark: ?enum { set, jump } = null,
 last_zoom_ms: i64 = 0,
 gesture: ?Gesture = null,
 last_click: ?Click = null,
+inverse_press: ?c.fz_point = null,
 
 const Gesture = struct {
     start: c.fz_point,
@@ -86,6 +87,7 @@ const actions = [_]Action{
     .{ .name = "display_link", .run = displayLink },
     .{ .name = "copy_link", .run = copyLink },
     .{ .name = "reload", .run = reload },
+    .{ .name = "inverse_search", .run = inverseSearch },
     .{ .name = "copy_path", .run = copyPath },
     .{ .name = "trim_margins", .run = trimMargins },
     .{ .name = "colorize", .run = colorize },
@@ -444,6 +446,50 @@ fn quit(s: *Context, _: ?u32) void {
 pub fn cancelMouseGesture(self: *Self) void {
     self.gesture = null;
     self.last_click = null;
+    self.inverse_press = null;
+}
+
+fn mousePosition(s: *Context, mouse: vaxis.Mouse) c.fz_point {
+    const view = &s.view;
+    const pixel = s.vx.state.pixel_mouse;
+    return view.mousePoint(mouse.col, mouse.row, if (pixel) mouse.xoffset else @intCast(@max(0, @divFloor(view.cell_w, 2))), if (pixel) mouse.yoffset else @intCast(@max(0, @divFloor(view.cell_h, 2))));
+}
+
+fn inverseSearch(s: *Context, _: ?u32) void {
+    var point: c.fz_point = .{ .x = @as(f32, @floatFromInt(s.view.width)) / 2, .y = @as(f32, @floatFromInt(s.view.height)) / 2 };
+    if (s.pointer) |mouse| {
+        const pointer = mousePosition(s, mouse);
+        if (s.view.pageAt(pointer) != null) point = pointer;
+    }
+    if (s.view.pageAt(point)) |page| {
+        inverseOnPage(s, page);
+    } else if (s.view.pointOnPage(s.currentPage(), point)) |on_page| {
+        // The centre can lie in the gutter of a two-page spread.
+        inverseOnPage(s, .{ .page = s.currentPage(), .point = on_page });
+    } else {
+        s.showMessage("No PDF page at this position", .{});
+    }
+}
+
+fn inverseAt(s: *Context, position: c.fz_point) void {
+    const page = s.view.pageAt(position) orelse {
+        s.showMessage("No PDF page at this position", .{});
+        return;
+    };
+    inverseOnPage(s, page);
+}
+
+fn inverseOnPage(s: *Context, page: View.PagePoint) void {
+    const program = s.inverse_program orelse {
+        s.showMessage("Inverse search needs --inverse-search PROGRAM", .{});
+        return;
+    };
+    const pdf = &s.document_handler.pdf_handler;
+    const text = if (s.inverse_resolver != null) pdf.lineAt(page.page, page.point) else null;
+    defer if (text) |value| c.fz_free(pdf.ctx, value);
+    @import("../services/Preview.zig").inverse(s.allocator, program, s.inverse_resolver, s.absolute_path orelse pdf.path, page.page + 1, page.point.x, page.point.y, if (text) |value| std.mem.span(value) else "") catch |err| {
+        s.showMessage("Inverse search failed: {s}", .{@errorName(err)});
+    };
 }
 
 pub fn handleMouse(self: *Self, mouse: vaxis.Mouse) !void {
@@ -493,14 +539,15 @@ fn handleLeftMouse(self: *Self, mouse: vaxis.Mouse) !void {
         if (pixel) mouse.xoffset else @intCast(@divFloor(view.cell_w, 2)),
         if (pixel) mouse.yoffset else @intCast(@divFloor(view.cell_h, 2)),
     );
+    if (mouse.type == .release and self.inverse_press != null) {
+        const pressed = self.inverse_press.?;
+        self.cancelMouseGesture();
+        if (s.inverse_program != null and mouseDistance(pressed, position) <= drag_threshold) inverseAt(s, position);
+        return;
+    }
     if (mouse.mods.ctrl) {
         self.cancelMouseGesture();
-        if (mouse.type != .press) return;
-        const program = s.inverse_program orelse return;
-        const page = view.pageAt(position) orelse return;
-        @import("../services/Preview.zig").inverse(s.allocator, program, s.absolute_path orelse pdf.path, page.page + 1, page.point.x, page.point.y) catch |err| {
-            s.showMessage("Inverse search failed: {s}", .{@errorName(err)});
-        };
+        if (mouse.type == .press) self.inverse_press = position;
         return;
     }
     switch (mouse.type) {

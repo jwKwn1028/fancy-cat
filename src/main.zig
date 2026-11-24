@@ -62,16 +62,19 @@ pub fn main() !void {
     var first: usize = 1;
     var socket_path: ?[]const u8 = null;
     var inverse: ?[]const u8 = null;
+    var inverse_resolver: ?[]const u8 = null;
     while (first + 1 < args.len) : (first += 2) {
         if (std.mem.eql(u8, args[first], "--listen")) {
             socket_path = args[first + 1];
         } else if (std.mem.eql(u8, args[first], "--inverse-search")) {
             inverse = args[first + 1];
+        } else if (std.mem.eql(u8, args[first], "--inverse-search-resolver")) {
+            inverse_resolver = args[first + 1];
         } else break;
     }
     const positional = args[first..];
     if (positional.len == 0 or positional.len > 2 or (std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h"))) {
-        try stderr.writeAll("Usage: fancy-cat [--listen SOCKET] [--inverse-search PROGRAM] PDF [PAGE]\n       fancy-cat --remote SOCKET goto-page PAGE [TEXT]\n       fancy-cat --remote SOCKET forward-search ABSOLUTE_SOURCE LINE [COLUMN]\n");
+        try stderr.writeAll("Usage: fancy-cat [--listen SOCKET] [--inverse-search PROGRAM] [--inverse-search-resolver PROGRAM] PDF [PAGE]\n       fancy-cat --remote SOCKET goto-page PAGE [TEXT]\n       fancy-cat --remote SOCKET forward-search ABSOLUTE_SOURCE LINE [COLUMN]\n");
         try stderr.flush();
         return;
     }
@@ -90,6 +93,7 @@ pub fn main() !void {
     defer app.deinit();
 
     app.inverse_program = inverse;
+    app.inverse_resolver = inverse_resolver;
     app.socket_path = socket_path;
     try app.run();
 }
