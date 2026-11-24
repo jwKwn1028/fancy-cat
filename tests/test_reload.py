@@ -5,6 +5,9 @@ Usage: python3 -I tests/test_reload.py zig-out/bin/fancy-cat
 import json
 import os
 from pathlib import Path
+import signal
+import socket
+import subprocess
 import sys
 import tempfile
 
@@ -42,12 +45,12 @@ def pdf_bytes(pages, rgb, width=400):
     return output
 
 
-def start(root, watch):
+def start(root, watch, *, listen=False, latency=0.03):
     config = root / "config/fancy-cat/config.json"
     config.parent.mkdir(parents=True)
     config.write_text(json.dumps({
         "StatusBar": {"enabled": True, "items": ["P<page>/<total_pages> <path>"]},
-        "FileMonitor": {"enabled": watch, "latency": 0.03},
+        "FileMonitor": {"enabled": watch, "latency": latency},
         "General": {"remember_page": False, "timeout": 0.75, "retry_delay": 0.04,
                     "detect_dpi": False},
         "Cache": {"enabled": False},
@@ -56,7 +59,8 @@ def start(root, watch):
     source.write_bytes(pdf_bytes(6, "0 0 1"))
     env = dict(os.environ, HOME=str(root), XDG_CONFIG_HOME=str(config.parent.parent),
                XDG_STATE_HOME=str(root / "state"), TMPDIR=str(root), TERM="xterm-256color")
-    viewer = Viewer(BINARY, [str(source)], env)
+    args = ["--listen", str(root / "preview.sock")] if listen else []
+    viewer = Viewer(BINARY, [*args, str(source)], env)
     viewer.pump(1.5)
     return viewer, source
 
@@ -161,4 +165,53 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-test-reload-") as directory:
     finally:
         finish(viewer, root)
 
-print("PASS: asynchronous manual and watched reload, last good viewport, timeout, replacement and quit")
+with tempfile.TemporaryDirectory(prefix="fancy-cat-push-reload-") as directory:
+    for watch in (True, False):
+        root = Path(directory) / str(watch)
+        viewer, source = start(root, watch, listen=True, latency=60)
+        sock = str(root / "preview.sock")
+
+        def remote(*args):
+            subprocess.run([BINARY, "--remote", sock, *args], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        try:
+            staged = source.with_suffix(".new")
+            staged.write_bytes(pdf_bytes(3, "0 1 0"))
+            os.replace(staged, source)
+            viewer.pump(0.1)
+            expect_page(viewer, "P1/6")
+            remote("reload")
+            viewer.pump(0.4)
+            expect_page(viewer, "P1/3")
+            assert pixels(viewer) == b"\0\xff\0", "notification did not reload the published PDF"
+
+            transmits = viewer.transmits
+            remote("reload")
+            remote("reload")
+            viewer.pump(0.3)
+            assert viewer.transmits == transmits, "unchanged notifications reloaded the same PDF"
+
+            # Reloads preserve navigation in either order.
+            for commands, page in [((b"goto-page\x004", b"reload"), "P4/4"),
+                                   ((b"reload", b"goto-page\x002"), "P2/4")]:
+                staged.write_bytes(pdf_bytes(4, "1 0 0"))
+                os.replace(staged, source)
+                os.kill(viewer.pid, signal.SIGSTOP)
+                try:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sender:
+                        for command in commands:
+                            sender.sendto(command, sock)
+                finally:
+                    os.kill(viewer.pid, signal.SIGCONT)
+                viewer.pump(0.5)
+                expect_page(viewer, page)
+                assert pixels(viewer) == b"\xff\0\0"
+
+            invalid = subprocess.run([BINARY, "--remote", sock, "reload", "extra"],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            assert invalid.returncode != 0, "reload accepted an extra argument"
+        finally:
+            finish(viewer, root)
+
+print("PASS: asynchronous manual, polling and notified reload, navigation bursts, last good viewport, timeout and quit")

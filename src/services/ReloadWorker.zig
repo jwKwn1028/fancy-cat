@@ -29,6 +29,7 @@ wake: std.Thread.Condition = .{},
 stopping: std.atomic.Value(bool) = .init(false),
 stopped: std.atomic.Value(bool) = .init(false),
 manual: bool = false,
+notified: bool = false,
 ready: ?Result = null,
 thread: std.Thread = undefined,
 
@@ -45,6 +46,14 @@ pub fn request(self: *Self) void {
     self.mutex.lock();
     defer self.mutex.unlock();
     self.manual = true;
+    self.wake.signal();
+}
+
+/// Check for a new publication; skip unchanged files.
+pub fn notifyChanged(self: *Self) void {
+    self.mutex.lock();
+    defer self.mutex.unlock();
+    self.notified = true;
     self.wake.signal();
 }
 
@@ -105,24 +114,26 @@ fn run(self: *Self) void {
     var next_check: u64 = if (self.monitor.enabled) 0 else std.math.maxInt(u64);
     while (!self.stopping.load(.acquire)) {
         const now = self.clock.read();
-        if (now >= next_check) {
-            const stamp = Snapshot.Stamp.read(self.path);
-            if (!std.meta.eql(seen, stamp)) {
-                // A new inode is an atomic replacement, already complete: load it
-                // now. An in-place write may still be running, so let it settle.
-                const replaced = if (seen) |old| if (stamp) |new| old.inode != new.inode else false else false;
-                seen = stamp;
-                const due = if (replaced) now else now + interval;
-                const expires = if (pending) |old| old.expires else due + self.timeout;
-                pending = .{ .due = due, .expires = expires };
-            }
-            next_check = now + interval;
-        }
-
         self.mutex.lock();
         const manual = self.manual;
         self.manual = false;
+        const notified = self.notified;
+        self.notified = false;
         self.mutex.unlock();
+
+        if (now >= next_check or notified) {
+            const stamp = Snapshot.Stamp.read(self.path);
+            if (!std.meta.eql(seen, stamp)) {
+                // Load publications immediately; let other writes settle.
+                const replaced = if (seen) |old| if (stamp) |new| old.inode != new.inode else false else false;
+                seen = stamp;
+                const due = if (replaced or notified) now else now + interval;
+                const expires = if (pending) |old| old.expires else due + self.timeout;
+                pending = .{ .due = due, .expires = expires };
+            }
+            if (self.monitor.enabled) next_check = now + interval;
+        }
+
         if (manual) pending = .{ .due = now, .expires = now + self.timeout };
 
         if (pending) |job| {
@@ -143,7 +154,7 @@ fn run(self: *Self) void {
         }
 
         self.mutex.lock();
-        if (!self.manual and !self.stopping.load(.acquire)) {
+        if (!self.manual and !self.notified and !self.stopping.load(.acquire)) {
             const wake_at = if (pending) |job| @min(job.due, next_check) else next_check;
             if (wake_at == std.math.maxInt(u64)) {
                 self.wake.wait(&self.mutex);

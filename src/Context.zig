@@ -310,34 +310,40 @@ pub const Context = struct {
 
     fn receiveRemote(self: *Self, fd: std.posix.socket_t) !void {
         var buf: [Preview.limit + 1]u8 = undefined;
-        // Cursor jumps can arrive in bursts; resolve only the latest destination.
-        // Bound the drain so a busy sender still leaves time for terminal input.
+        var publication = false;
+        // Coalesce navigation without dropping reload notifications.
+        // Bound each drain to keep terminal input responsive.
         for (0..32) |_| {
             const n = std.posix.recv(fd, &buf, 0) catch |err| switch (err) {
                 error.WouldBlock => break,
                 else => return err,
             };
             if (n > Preview.limit) return error.CommandTooLong;
-            _ = try Preview.Command.parse(buf[0..n]);
+            const command = try Preview.Command.parse(buf[0..n]);
+            if (command == .reload) {
+                publication = true;
+                continue;
+            }
             @memcpy(self.remote_buf[0..n], buf[0..n]);
             self.remote_len = n;
             self.remote_waiting = false;
         }
+        if (publication) if (self.reloader) |worker| worker.notifyChanged();
         if (self.remote_len == 0 or self.remote_waiting) return;
         const pdf = &self.document_handler.pdf_handler;
-        if (self.config.file_monitor.enabled and
+        if ((self.config.file_monitor.enabled or publication) and
             !std.meta.eql(Snapshot.Stamp.read(pdf.path), @as(?Snapshot.Stamp, pdf.snapshot.stamp)))
         {
-            // hxp may request a position before the new PDF has loaded. Release
-            // any outline/link objects and keep the command until reload finishes.
+            // Release outline/link objects and defer navigation until reload completes.
             self.changeMode(.view);
             self.remote_waiting = true;
-            self.reload();
+            if (!publication) if (self.reloader) |worker| worker.notifyChanged();
             return;
         }
         const command = try Preview.Command.parse(self.remote_buf[0..self.remote_len]);
         self.remote_len = 0;
         const point = switch (command) {
+            .reload => unreachable,
             .page => null,
             .forward => |f| try Preview.forward(self.allocator, self.absolute_path orelse pdf.path, f.source, f.line, f.column),
         };

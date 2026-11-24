@@ -55,7 +55,7 @@ pub fn main() !void {
 
     const preview = @import("services/Preview.zig");
     if (args.len >= 2 and std.mem.eql(u8, args[1], "--remote")) {
-        if (args.len < 5) return error.MissingRemoteArguments;
+        if (args.len < 4) return error.MissingRemoteArguments;
         return preview.send(std.heap.page_allocator, args[2], args[3..]);
     }
 
@@ -74,7 +74,7 @@ pub fn main() !void {
     }
     const positional = args[first..];
     if (positional.len == 0 or positional.len > 2 or (std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h"))) {
-        try stderr.writeAll("Usage: fancy-cat [--listen SOCKET] [--inverse-search PROGRAM] [--inverse-search-resolver PROGRAM] PDF [PAGE]\n       fancy-cat --remote SOCKET goto-page PAGE [TEXT]\n       fancy-cat --remote SOCKET forward-search ABSOLUTE_SOURCE LINE [COLUMN]\n");
+        try stderr.writeAll("Usage: fancy-cat [--listen SOCKET] [--inverse-search PROGRAM] [--inverse-search-resolver PROGRAM] PDF [PAGE]\n       fancy-cat --remote SOCKET reload\n       fancy-cat --remote SOCKET goto-page PAGE [TEXT]\n       fancy-cat --remote SOCKET forward-search ABSOLUTE_SOURCE LINE [COLUMN]\n");
         try stderr.flush();
         return;
     }

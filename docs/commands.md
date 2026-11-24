@@ -21,9 +21,14 @@ fancy-cat --listen "$session/view.sock" --inverse-search hxp-jump document.pdf
 From the editor process, pass the socket path for that session:
 
 ```sh
+fancy-cat --remote "$session/view.sock" reload
 fancy-cat --remote "$session/view.sock" goto-page 4 "phrase on page four"
 fancy-cat --remote "$session/view.sock" forward-search "$PWD/document.tex" 28 1
 ```
+
+`reload` checks for a published PDF immediately, even with polling disabled.
+Unchanged files are skipped and queued navigation is preserved. Polling remains
+the fallback.
 
 Pages and lines start at one. The phrase and column are optional. A page jump
 stays on its requested page if the phrase is absent. Forward search uses the

@@ -5,12 +5,17 @@ const Spawn = @import("../utilities/Spawn.zig");
 pub const limit = 8192;
 
 pub const Command = union(enum) {
+    reload,
     page: struct { number: u16, text: ?[]const u8 },
     forward: struct { source: []const u8, line: u32, column: u32 },
 
     pub fn parse(data: []const u8) !Command {
         var parts = std.mem.splitScalar(u8, data, 0);
         const name = parts.next() orelse return error.InvalidCommand;
+        if (std.mem.eql(u8, name, "reload")) {
+            if (parts.next() != null) return error.TooManyArguments;
+            return .reload;
+        }
         const arg = parts.next() orelse return error.MissingArgument;
         const cmd: Command = if (std.mem.eql(u8, name, "goto-page")) blk: {
             const number = try std.fmt.parseInt(u16, arg, 10);
