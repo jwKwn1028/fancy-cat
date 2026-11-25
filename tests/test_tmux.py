@@ -111,6 +111,8 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-tmux-test-") as directory:
         assert PLACEHOLDER in pane() and "P2/5" in pane(), pane()
         assert UPLOAD in term.raw and PLACEHOLDER.encode() in term.raw
         assert b"\x1b[?2026h" in term.raw, "tmux did not synchronize redraws to the terminal"
+        assert tmux("display-message", "-p", "-t", viewer_pane, "#{pane_title}").strip() == "live.pdf", \
+            "the pane was not titled after the document"
 
         term.send("\x0c", 0.3)
         assert inverse_log.read_text() == PDF+":3:1", "Ctrl+L did not reach fancy-cat in tmux"
@@ -175,6 +177,17 @@ with tempfile.TemporaryDirectory(prefix="fancy-cat-tmux-test-") as directory:
         tmux("select-window", "-t", "viewer:0")
         term.pump(0.6)
         assert UPLOAD in term.raw[start:] and PLACEHOLDER in pane(), "focus did not restore images"
+
+        # Quitting restores the title of the program that opened the viewer (Yazi).
+        opener = "printf '\\033]2;browser\\033\\\\'; " + shlex.join([BINARY, PDF]) + "; sleep 10"
+        tmux("new-window", "-t", "viewer:2", opener)
+        term.pump(0.8)
+        title = lambda: tmux("display-message", "-p", "-t", "viewer:2", "#{pane_title}").strip()
+        assert title() == "live.pdf", title()
+        term.send("q", 0.4)
+        assert title() == "browser", "quitting left the document title behind"
+        tmux("select-window", "-t", "viewer:0")
+        term.pump(0.6)
 
         tmux("detach-client", "-s", "viewer")
         term.pump(0.3)

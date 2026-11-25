@@ -197,6 +197,18 @@ pub const Context = struct {
         // The view places its own images; vaxis would delete them every frame.
         self.vx.caps.kitty_graphics = false;
         try self.vx.setMouseMode(self.tty.writer(), true);
+        // Title the terminal (or tmux pane) after the document; restore the old title on exit.
+        const name = std.fs.path.basename(self.document_handler.getPath());
+        const titled = for (name) |c| {
+            if (c < 0x20 or c == 0x7f) break false;
+        } else true;
+        if (titled) {
+            try self.tty.writer().writeAll("\x1b[22;2t");
+            try self.vx.setTitle(self.tty.writer(), name);
+        }
+        defer if (titled) {
+            self.tty.writer().writeAll("\x1b[23;2t") catch {};
+        };
 
         if (self.config.file_monitor.enabled) {
             self.current_reload_indicator_state = .watching;
