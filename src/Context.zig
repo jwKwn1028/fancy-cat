@@ -26,6 +26,31 @@ pub const Event = union(enum) {
     winsize: vaxis.Winsize,
     reload_ready,
     focus_in,
+    terminate,
+};
+
+/// SIGTERM or SIGHUP (shutdown, closed pane) wakes the loop through a pipe: the handler only writes.
+const Termination = struct {
+    var pipe: [2]std.posix.fd_t = .{ -1, -1 };
+
+    fn handle(_: c_int) callconv(.c) void {
+        _ = std.posix.write(pipe[1], "x") catch {};
+    }
+
+    fn watch(loop: *vaxis.Loop(Event)) void {
+        var byte: [1]u8 = undefined;
+        _ = std.posix.read(pipe[0], &byte) catch return;
+        loop.postEvent(.terminate);
+    }
+
+    fn install(loop: *vaxis.Loop(Event)) void {
+        pipe = std.posix.pipe2(.{ .CLOEXEC = true }) catch return;
+        const thread = std.Thread.spawn(.{}, watch, .{loop}) catch return;
+        thread.detach();
+        var act = std.posix.Sigaction{ .handler = .{ .handler = handle }, .mask = std.posix.sigemptyset(), .flags = 0 };
+        std.posix.sigaction(std.posix.SIG.TERM, &act, null);
+        std.posix.sigaction(std.posix.SIG.HUP, &act, null);
+    }
 };
 
 pub const ModeType = enum { view, command, index, hints };
@@ -35,6 +60,8 @@ pub const ReloadIndicatorState = enum { idle, reload, watching };
 pub const Context = struct {
     const Self = @This();
     const scroll_frame_ns = std.time.ns_per_s / 60;
+    /// Remember a page once it has been shown this long.
+    const position_settle_ns = std.time.ns_per_s;
     const reload_message = "Could not reload PDF. Still showing the previous version.";
 
     allocator: std.mem.Allocator,
@@ -71,6 +98,9 @@ pub const Context = struct {
     repeats: std.ArrayList(Repeat) = .empty,
     search_origin: ?View.Position = null,
     scroll_animation: ?[3]f32 = null,
+    saved_page: u16 = 0,
+    pending_page: u16 = 0,
+    position_clock: ?std.time.Timer = null,
 
     const Repeat = struct { reverse: bool, count: u32 };
     const SearchTask = struct {
@@ -129,6 +159,8 @@ pub const Context = struct {
             .reload_indicator_active = false,
             .buf = buf,
             .absolute_path = absolute_path,
+            .saved_page = start_page + 1,
+            .pending_page = start_page + 1,
         };
     }
 
@@ -138,12 +170,8 @@ pub const Context = struct {
 
         self.history.deinit();
         self.repeats.deinit(self.allocator);
-        if (self.absolute_path) |p| {
-            if (self.config.general.remember_page) {
-                Positions.save(self.allocator, p, self.currentPage() + 1);
-            }
-            self.allocator.free(p);
-        }
+        self.savePosition();
+        if (self.absolute_path) |p| self.allocator.free(p);
         self.view.deinit(self.tty.writer());
         self.document_handler.deinit();
         if (self.config.general.progress_bar) self.tty.writer().writeAll("\x1b]9;4;0;0\x07") catch {};
@@ -182,6 +210,7 @@ pub const Context = struct {
         try loop.init();
         try loop.start();
         defer loop.stop();
+        Termination.install(&loop);
         try self.vx.enterAltScreen(self.tty.writer());
         if (self.view.transport == .tmux) {
             // Focus events prompt fresh uploads when a client attaches.
@@ -267,7 +296,7 @@ pub const Context = struct {
             const indicator_delay = self.indicatorDelay();
             var idle_delay = indicator_delay;
             const wheel_delay = if (wheel != 0 and wheel_clock != null) tmux_wheel_interval -| wheel_clock.?.read() else null;
-            for ([_]?u64{ search_delay, self.view.tmuxDelay(), wheel_delay }) |pending| {
+            for ([_]?u64{ search_delay, self.view.tmuxDelay(), wheel_delay, self.positionDelay() }) |pending| {
                 if (pending) |delay| idle_delay = @min(delay, idle_delay orelse delay);
             }
             if (self.scroll_animation != null) {
@@ -284,6 +313,12 @@ pub const Context = struct {
             }
 
             while (loop.tryEvent()) |event| {
+                if (event == .terminate) {
+                    // Save now: stopping the terminal reader can wait on a terminal that is gone.
+                    self.savePosition();
+                    self.should_quit = true;
+                    continue;
+                }
                 if (event == .mouse) self.pointer = event.mouse;
                 if (self.should_quit or event == .reload_ready or (event == .mouse and event.mouse.type == .motion)) continue;
                 if (self.wheelDirection(event)) |direction| {
@@ -308,6 +343,7 @@ pub const Context = struct {
             frame_clock.reset();
             self.advanceScroll();
             try self.frame(&worker);
+            self.trackPosition();
 
             if (!loop.queue.isEmpty()) continue;
             var search_changed = false;
@@ -557,8 +593,38 @@ pub const Context = struct {
                     self.vx.queueRefresh();
                 }
             },
-            .reload_ready => {},
+            .reload_ready, .terminate => {},
         }
+    }
+
+    /// Save the page once it has stayed put for `position_settle_ns`.
+    fn trackPosition(self: *Self) void {
+        if (!self.config.general.remember_page or self.absolute_path == null) return;
+        const page = self.currentPage() + 1;
+        if (page != self.pending_page) {
+            self.pending_page = page;
+            self.position_clock = std.time.Timer.start() catch null;
+        } else if (page == self.saved_page) {
+            self.position_clock = null;
+        } else if (self.position_clock) |*clock| {
+            if (clock.read() >= position_settle_ns) self.savePosition();
+        }
+    }
+
+    fn positionDelay(self: *Self) ?u64 {
+        const clock = if (self.position_clock) |*timer| timer else return null;
+        return position_settle_ns -| clock.read();
+    }
+
+    fn savePosition(self: *Self) void {
+        const path = self.absolute_path orelse return;
+        if (!self.config.general.remember_page) return;
+        const page = self.currentPage() + 1;
+        self.position_clock = null;
+        if (page == self.saved_page) return;
+        Positions.save(self.allocator, path, page);
+        self.saved_page = page;
+        self.pending_page = page;
     }
 
     pub fn drawStatusBar(self: *Self, win: vaxis.Window) !void {

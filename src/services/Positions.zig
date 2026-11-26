@@ -35,6 +35,13 @@ pub fn save(allocator: std.mem.Allocator, document: []const u8, page: u16) void 
     if (std.mem.indexOfAny(u8, document, "\t\n") != null) return;
     const path = filePath(allocator) orelse return;
     defer allocator.free(path);
+    if (std.fs.path.dirname(path)) |dir| std.fs.cwd().makePath(dir) catch {};
+
+    // Viewers save at once on shutdown: lock the read-modify-write, replace the file whole.
+    const lock_path = std.fmt.allocPrint(allocator, "{s}.lock", .{path}) catch return;
+    defer allocator.free(lock_path);
+    const lock = std.fs.createFileAbsolute(lock_path, .{ .truncate = false, .lock = .exclusive }) catch return;
+    defer lock.close();
 
     const content = std.fs.cwd().readFileAlloc(allocator, path, max_size) catch null;
     defer if (content) |text| allocator.free(text);
@@ -49,9 +56,14 @@ pub fn save(allocator: std.mem.Allocator, document: []const u8, page: u16) void 
         }
     }
 
-    if (std.fs.path.dirname(path)) |dir| std.fs.cwd().makePath(dir) catch {};
-    const file = std.fs.createFileAbsolute(path, .{}) catch return;
-    defer file.close();
+    const temporary = std.fmt.allocPrint(allocator, "{s}.{d}.tmp", .{ path, std.c.getpid() }) catch return;
+    defer allocator.free(temporary);
+    const file = std.fs.createFileAbsolute(temporary, .{}) catch return;
+    var written = false;
+    defer {
+        file.close();
+        if (written) std.fs.renameAbsolute(temporary, path) catch {} else std.fs.deleteFileAbsolute(temporary) catch {};
+    }
 
     const start = if (kept.items.len >= max_entries) kept.items.len - (max_entries - 1) else 0;
     for (kept.items[start..]) |line| {
@@ -63,4 +75,5 @@ pub fn save(allocator: std.mem.Allocator, document: []const u8, page: u16) void 
     file.writeAll(prefix) catch return;
     file.writeAll(document) catch return;
     file.writeAll("\n") catch return;
+    written = true;
 }
